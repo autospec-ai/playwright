@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build (dist/ is NOT ignored — required for GitHub Actions)
+# dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*

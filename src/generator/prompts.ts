@@ -1,0 +1,270 @@
+import { ActionConfig, DiffResult, ExistingTest, FileDiff, TestPlan, TestPlanEntry } from '../types';
+
+/**
+ * Builds structured prompts for two-phase test generation:
+ *   Phase 1: Analyze diff → produce a test plan (JSON)
+ *   Phase 2: For each planned test → generate Playwright code
+ */
+export class PromptBuilder {
+  private config: ActionConfig;
+
+  constructor(config: ActionConfig) {
+    this.config = config;
+  }
+
+  // ─── Phase 1: Test Planning ───
+
+  buildPlanPrompt(diff: DiffResult, existingTests: ExistingTest[]): string {
+    const existingTestList = existingTests
+      .map(t => `  - ${t.filepath}`)
+      .join('\n');
+
+    const fileChangeSummary = diff.files
+      .map(f => this.summarizeFile(f))
+      .join('\n\n');
+
+    return `You are an expert QA automation engineer. Analyze the following code changes and produce a test plan.
+
+## Context
+- Framework: ${this.config.framework}
+- Base URL: ${this.config.baseUrl}
+- Test directory: ${this.config.testDirectory}
+- Test patterns: ${this.config.testPatterns.join(', ')}
+- Max tests to generate: ${this.config.maxTestFiles}
+
+## Existing Tests
+${existingTestList || '(none found)'}
+
+## Code Changes
+${diff.summary}
+
+${fileChangeSummary}
+
+## Instructions
+1. Analyze what user-facing behavior changed or was added.
+2. Identify the E2E test scenarios that would validate these changes.
+3. Skip changes that are purely internal/backend with no UI impact, unless they affect API responses rendered in the UI.
+4. Prioritize: new features > modified flows > edge cases.
+5. Don't duplicate coverage already in existing tests unless the behavior changed.
+6. Assign a severity to each test based on the user impact of what it validates:
+   - sev1 (Critical): Core user flows — authentication, checkout, data loss prevention, payment processing
+   - sev2 (High): Important features, commonly used paths, key business logic
+   - sev3 (Medium): Secondary features, less frequent user flows, settings pages
+   - sev4 (Low): Edge cases, cosmetic issues, rarely used features
+${this.config.customInstructions ? `\n## Additional Instructions\n${this.config.customInstructions}` : ''}
+${this.config.generateApiMocks ? `
+## API Dependency Detection
+For each test, also detect external API dependencies in the changed code:
+- Look for fetch(), axios, useSWR, useQuery, WebSocket, or similar HTTP/WS patterns
+- Identify the URL patterns, HTTP methods, and what data shapes they return
+- Include an "apiDependencies" array for each test entry (can be empty if none detected)
+` : ''}
+## Response Format
+Respond with ONLY valid JSON (no markdown fences):
+{
+  "reasoning": "Brief explanation of your analysis",
+  "tests": [
+    {
+      "targetFile": "src/components/Login.tsx",
+      "testFilename": "login-flow.spec.ts",
+      "description": "Validates the new OAuth login flow",
+      "userFlows": [
+        "User clicks 'Sign in with Google' button",
+        "User sees loading state during OAuth redirect",
+        "User lands on dashboard after successful auth"
+      ],
+      "priority": "high",
+      "severity": "sev1"${this.config.generateApiMocks ? `,
+      "apiDependencies": [
+        {
+          "url": "/api/auth/google",
+          "method": "POST",
+          "description": "Google OAuth callback",
+          "responseShape": "{ token: string, user: { id, name, email } }",
+          "isWebSocket": false
+        }
+      ]` : ''}
+    }
+  ]
+}
+
+If no tests are needed (e.g., only config/docs changed), return:
+{
+  "reasoning": "Explanation of why no tests are needed",
+  "tests": []
+}`;
+  }
+
+  // ─── Phase 2: Test Code Generation ───
+
+  buildTestPrompt(
+    plan: TestPlan['tests'][number],
+    diff: DiffResult,
+    existingTests: ExistingTest[],
+    styleReference?: string
+  ): string {
+    // Find the specific diff for the target file
+    const targetDiff = diff.files.find(f => f.filename === plan.targetFile);
+
+    // Get related file diffs (same directory or imports)
+    const relatedDiffs = diff.files
+      .filter(f => f.filename !== plan.targetFile)
+      .filter(f => this.isRelated(f.filename, plan.targetFile))
+      .slice(0, 3);
+
+    return `You are an expert Playwright test author. Generate a production-quality E2E test file.
+
+## Test Specification
+- Test file: ${this.config.testDirectory}/${plan.testFilename}
+- Description: ${plan.description}
+- Severity: ${plan.severity}
+- Base URL: ${this.config.baseUrl}
+- Framework: ${this.config.framework}
+
+## User Flows to Test
+${plan.userFlows.map((f, i) => `${i + 1}. ${f}`).join('\n')}
+
+## Source Code Changes
+${targetDiff ? this.formatDiff(targetDiff) : '(target file diff not available)'}
+
+${relatedDiffs.length > 0 ? '## Related Changes\n' + relatedDiffs.map(d => this.formatDiff(d)).join('\n\n') : ''}
+
+${styleReference ? `## Style Reference (match this pattern)\n\`\`\`typescript\n${styleReference}\n\`\`\`` : ''}
+
+## Requirements
+1. Use Playwright test runner with TypeScript.
+2. Import from '@playwright/test' (test, expect, Page).
+3. Use test.describe() blocks to group related tests.
+4. Use descriptive test names that explain the expected behavior.
+5. Use page object patterns where it reduces duplication.
+6. Add meaningful assertions — not just "page loads".
+7. Use data-testid selectors when inferrable, otherwise use accessible selectors (role, label, text).
+8. Handle async operations with proper waitFor / expect patterns.
+9. Include setup (test.beforeEach for navigation) and teardown if needed.
+10. Add JSDoc comment at the top explaining what this test covers.
+11. Tag the test.describe() block with the severity level using Playwright's tag syntax: test.describe('Description', { tag: ['@${plan.severity}'] }, () => { ... })
+${this.buildApiMockSection(plan)}${this.buildVisualRegressionSection()}${this.buildAccessibilitySection()}${this.config.customInstructions ? `\n## Additional Instructions\n${this.config.customInstructions}` : ''}
+
+## Response Format
+Respond with ONLY the TypeScript test file content. No markdown fences, no explanation — just the code.`;
+  }
+
+  // ─── Feature Prompt Sections ───
+
+  private buildApiMockSection(plan: TestPlanEntry): string {
+    if (!this.config.generateApiMocks || !plan.apiDependencies?.length) {
+      return '';
+    }
+
+    const endpoints = plan.apiDependencies
+      .map(dep => `  - ${dep.method} ${dep.url} — ${dep.description}${dep.isWebSocket ? ' (WebSocket)' : ''}`)
+      .join('\n');
+
+    return `
+## API Mocking Requirements
+The following API endpoints were detected in the source code. Generate \`page.route()\` mocks for each:
+${endpoints}
+
+Guidelines:
+- Use glob URL patterns (e.g., \`**/api/users*\`) for flexibility.
+- Return realistic mock data matching the expected response shapes.
+- Include proper Content-Type headers in route handlers.
+${this.config.mockErrorStates ? `- Generate ADDITIONAL test cases that simulate error responses (4xx/5xx) for each endpoint.
+- Test that the UI handles loading, error, and empty states gracefully.` : ''}
+`;
+  }
+
+  private buildVisualRegressionSection(): string {
+    if (!this.config.visualRegression) {
+      return '';
+    }
+
+    return `
+## Visual Regression Requirements
+Add \`toHaveScreenshot()\` assertions at key visual checkpoints:
+- After the page finishes loading (wait for network idle or key element).
+- After significant UI state changes (e.g., modal open, form submission).
+- Use descriptive screenshot names like \`'dashboard-loaded.png'\`.
+- Mask dynamic content (timestamps, avatars, ads) using \`mask: [locator]\` option.
+- Use threshold: ${this.config.visualThreshold}, maxDiffPixelRatio: ${this.config.visualMaxDiffRatio}, fullPage: ${this.config.visualFullPage}.
+`;
+  }
+
+  private buildAccessibilitySection(): string {
+    if (!this.config.accessibilityAssertions && !this.config.axeScan) {
+      return '';
+    }
+
+    let section = '';
+
+    if (this.config.accessibilityAssertions) {
+      section += `
+## Aria Snapshot Assertions
+Add \`toMatchAriaSnapshot()\` assertions for the primary component being tested:
+- Use scoped locators (e.g., \`page.getByRole('main')\` or specific component containers).
+- Capture the aria snapshot after the component is fully rendered.
+- This validates the accessibility tree structure hasn't regressed.
+`;
+    }
+
+    if (this.config.axeScan) {
+      section += `
+## Axe Accessibility Scan
+Generate a SEPARATE test case that runs an axe-core accessibility scan:
+- Import AxeBuilder from '@axe-core/playwright'.
+- Create a test named 'should have no accessibility violations'.
+- Use: const results = await new AxeBuilder({ page }).withTags(['${this.config.axeStandard}']).analyze();
+- Assert: expect(results.violations).toEqual([]);
+- Scope the scan to the main content area when possible.
+`;
+    }
+
+    return section;
+  }
+
+  // ─── Helpers ───
+
+  private summarizeFile(file: FileDiff): string {
+    const maxPatchLines = 80;
+    const patchLines = file.patch.split('\n');
+    const truncated = patchLines.length > maxPatchLines;
+    const patch = truncated
+      ? patchLines.slice(0, maxPatchLines).join('\n') + '\n... (truncated)'
+      : file.patch;
+
+    return `### ${file.status.toUpperCase()}: ${file.filename} (+${file.additions}/-${file.deletions})
+\`\`\`diff
+${patch}
+\`\`\``;
+  }
+
+  private formatDiff(file: FileDiff): string {
+    const maxLines = 60;
+    const lines = file.patch.split('\n');
+    const patch = lines.length > maxLines
+      ? lines.slice(0, maxLines).join('\n') + '\n... (truncated)'
+      : file.patch;
+
+    return `### ${file.filename} (${file.status})
+\`\`\`diff
+${patch}
+\`\`\``;
+  }
+
+  private isRelated(filename: string, targetFile: string): boolean {
+    // Same directory
+    const dirA = filename.split('/').slice(0, -1).join('/');
+    const dirB = targetFile.split('/').slice(0, -1).join('/');
+    if (dirA === dirB) return true;
+
+    // Shared path prefix (at least 2 segments)
+    const partsA = filename.split('/');
+    const partsB = targetFile.split('/');
+    let shared = 0;
+    for (let i = 0; i < Math.min(partsA.length, partsB.length); i++) {
+      if (partsA[i] === partsB[i]) shared++;
+      else break;
+    }
+    return shared >= 2;
+  }
+}

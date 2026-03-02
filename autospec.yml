@@ -1,0 +1,137 @@
+# ─────────────────────────────────────────────────────────────
+# AutoSpec AI — Example Workflow
+# Copy this to .github/workflows/autospec.yml in your repo
+# ─────────────────────────────────────────────────────────────
+
+name: AutoSpec AI - Generate E2E Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - 'src/**'
+      - 'pages/**'
+      - 'app/**'
+      - 'components/**'
+
+  # Optional: also run on push to main
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-tests:
+    runs-on: ubuntu-latest
+    name: Generate E2E Tests
+
+    steps:
+      # ─── Checkout with full history (needed for diff) ───
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ─── Generate Tests ───
+      - name: AutoSpec AI
+        id: autospec
+        uses: autospec-ai/action@v1
+        with:
+          # === LLM Config (pick one provider) ===
+
+          # Anthropic (recommended)
+          llm_provider: anthropic
+          llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # OpenAI
+          # llm_provider: openai
+          # llm_api_key: ${{ secrets.OPENAI_API_KEY }}
+
+          # === Test Config ===
+          test_directory: 'e2e/generated'
+          test_pattern: 'e2e/**/*.spec.ts,*-e2e/**/*.spec.ts'
+          base_url: 'http://localhost:3000'
+          framework: 'react'           # react | vue | svelte | angular | nextjs | generic
+
+          # === Behavior ===
+          auto_pr: 'true'              # Creates a separate PR with tests
+          max_test_files: '5'
+          # dry_run: 'true'            # Uncomment to preview without writing
+
+          # === Optional: scope what gets analyzed ===
+          # include_paths: 'src/components/,src/pages/'
+          # exclude_paths: 'src/utils/,src/types/'
+
+          # === Optional: project-specific LLM instructions ===
+          # custom_instructions: |
+          #   - Use data-cy selectors (our convention)
+          #   - Mock auth with: await mockAuth(page, 'admin')
+          #   - API base path is /api/v2/
+
+          # === Trace Viewer Integration ===
+          # trace_on_failure: 'true'     # Enable trace collection (default: true)
+          # trace_mode: 'retain-on-failure'  # on | off | retain-on-failure | on-first-retry
+
+          # === API Mock Generation ===
+          # generate_api_mocks: 'true'   # Detect APIs and generate page.route() mocks
+          # mock_error_states: 'true'    # Generate error-state test cases (4xx/5xx)
+          # fixture_extraction_threshold: '3'  # Extract mocks to fixtures when count exceeds this
+
+          # === Visual Regression Baselines ===
+          # visual_regression: 'true'    # Add toHaveScreenshot() assertions
+          # visual_threshold: '0.2'      # Pixel comparison threshold (0-1)
+          # visual_max_diff_ratio: '0.05'  # Max allowed diff pixel ratio
+          # visual_full_page: 'false'    # Capture full-page screenshots
+
+          # === Accessibility / Aria Snapshots ===
+          # accessibility_assertions: 'true'  # Add toMatchAriaSnapshot() assertions
+          # axe_scan: 'true'             # Generate axe-core accessibility scan test
+          # axe_standard: 'wcag2aa'      # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── Optional: Post summary as PR comment ───
+      # [FIX #10] Use env vars instead of inline interpolation to prevent script injection
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.autospec.outputs.tests_generated != '0'
+        uses: actions/github-script@v7
+        env:
+          TESTS_GENERATED: ${{ steps.autospec.outputs.tests_generated }}
+          SUMMARY: ${{ steps.autospec.outputs.summary }}
+          PR_NUMBER: ${{ steps.autospec.outputs.pr_number }}
+        with:
+          script: |
+            const testsGenerated = process.env.TESTS_GENERATED;
+            const summary = process.env.SUMMARY;
+            const prNumber = process.env.PR_NUMBER;
+
+            let body = `### 🤖 AutoSpec AI\n\n`;
+            body += `Generated **${testsGenerated}** E2E test(s).\n\n`;
+            body += `${summary}\n\n`;
+            if (prNumber) {
+              body += `📋 Review the generated tests in PR #${prNumber}`;
+            }
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
+      # ─── Optional: Run generated tests by severity ───
+      # Run only critical tests (sev1) for hotfix branches
+      # - name: Run critical tests
+      #   if: startsWith(github.head_ref, 'hotfix/')
+      #   run: npx playwright test --grep "@sev1"
+
+      # Run sev1 + sev2 for staging deployments
+      # - name: Run high-priority tests
+      #   run: npx playwright test --grep "@sev1|@sev2"
+
+      # Run all severity levels
+      # - name: Run all tests
+      #   run: npx playwright test

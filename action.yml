@@ -1,0 +1,151 @@
+name: 'AutoSpec AI - E2E Test Generator'
+description: 'Automatically generates Playwright E2E tests from commit diffs using LLMs (Anthropic, OpenAI, or compatible providers)'
+author: 'autospec-ai'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  # --- LLM Configuration ---
+  llm_provider:
+    description: 'LLM provider: anthropic | openai | custom'
+    required: false
+    default: 'anthropic'
+  llm_api_key:
+    description: 'API key for the LLM provider (use GitHub secrets)'
+    required: true
+  llm_model:
+    description: 'Model to use (defaults: claude-sonnet-4-20250514 for anthropic, gpt-4o for openai)'
+    required: false
+    default: ''
+  llm_base_url:
+    description: 'Custom base URL for OpenAI-compatible providers (e.g., Ollama, Together, Groq)'
+    required: false
+    default: ''
+
+  # --- Test Configuration ---
+  test_directory:
+    description: 'Directory where generated tests will be written'
+    required: false
+    default: 'e2e/generated'
+  test_pattern:
+    description: 'Comma-separated glob patterns to find existing tests (e.g., e2e/**/*.spec.ts,*-e2e/**/*.spec.ts)'
+    required: false
+    default: 'e2e/**/*.spec.ts,*-e2e/**/*.spec.ts'
+  base_url:
+    description: 'Application base URL for Playwright tests'
+    required: false
+    default: 'http://localhost:3000'
+  framework:
+    description: 'Frontend framework hint: react | vue | svelte | angular | nextjs | generic'
+    required: false
+    default: 'generic'
+
+  # --- Diff Configuration ---
+  diff_mode:
+    description: 'How to determine changes: auto | pr | push'
+    required: false
+    default: 'auto'
+  include_paths:
+    description: 'Comma-separated path prefixes to include (e.g., src/,pages/,components/)'
+    required: false
+    default: ''
+  exclude_paths:
+    description: 'Comma-separated path prefixes to exclude (e.g., test/,docs/,.github/)'
+    required: false
+    default: 'test/,tests/,e2e/,__tests__/,.github/,docs/,README'
+
+  # --- Behavior ---
+  auto_commit:
+    description: 'Automatically commit generated tests'
+    required: false
+    default: 'false'
+  auto_pr:
+    description: 'Create a PR with generated tests instead of committing to branch'
+    required: false
+    default: 'true'
+  max_test_files:
+    description: 'Maximum number of test files to generate per run'
+    required: false
+    default: '5'
+  dry_run:
+    description: 'Preview generated tests without writing files'
+    required: false
+    default: 'false'
+  custom_instructions:
+    description: 'Additional instructions for the LLM when generating tests'
+    required: false
+    default: ''
+
+  # --- Trace Viewer Integration ---
+  trace_on_failure:
+    description: 'Enable Playwright trace collection for test failures'
+    required: false
+    default: 'true'
+  trace_mode:
+    description: 'Playwright trace mode: on | off | retain-on-failure | on-first-retry'
+    required: false
+    default: 'retain-on-failure'
+
+  # --- API Mock Generation ---
+  generate_api_mocks:
+    description: 'Detect API dependencies and generate page.route() mocks in tests'
+    required: false
+    default: 'false'
+  mock_error_states:
+    description: 'Generate additional test cases for API error responses (4xx/5xx)'
+    required: false
+    default: 'false'
+  fixture_extraction_threshold:
+    description: 'Number of page.route() calls before extracting mocks into a shared fixture file'
+    required: false
+    default: '3'
+
+  # --- Visual Regression Baselines ---
+  visual_regression:
+    description: 'Add toHaveScreenshot() assertions at visual checkpoints'
+    required: false
+    default: 'false'
+  visual_threshold:
+    description: 'Pixel comparison threshold (0-1) for visual regression'
+    required: false
+    default: '0.2'
+  visual_max_diff_ratio:
+    description: 'Maximum allowed diff pixel ratio (0-1) before test fails'
+    required: false
+    default: '0.05'
+  visual_full_page:
+    description: 'Capture full-page screenshots instead of viewport only'
+    required: false
+    default: 'false'
+
+  # --- Accessibility / Aria Snapshot Assertions ---
+  accessibility_assertions:
+    description: 'Add toMatchAriaSnapshot() assertions for changed components'
+    required: false
+    default: 'false'
+  axe_scan:
+    description: 'Generate a dedicated axe-core accessibility scan test case'
+    required: false
+    default: 'false'
+  axe_standard:
+    description: 'axe-core accessibility standard: wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice'
+    required: false
+    default: 'wcag2aa'
+
+outputs:
+  tests_generated:
+    description: 'Number of test files generated'
+  test_files:
+    description: 'JSON array of generated test file paths'
+  pr_number:
+    description: 'PR number if auto_pr is enabled'
+  summary:
+    description: 'Human-readable summary of what was generated'
+  fixture_files:
+    description: 'JSON array of generated fixture file paths (when API mock generation is enabled)'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
