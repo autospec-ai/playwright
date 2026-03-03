@@ -37354,6 +37354,7 @@ const exec = __importStar(__nccwpck_require__(5236));
 // [FIX #2] Sanitize strings for use in commit messages
 function sanitizeForCommitMessage(value) {
     // Remove control characters and backticks that could affect git hooks or parsers
+    // eslint-disable-next-line no-control-regex
     return value.replace(/[`\x00-\x1f\x7f]/g, '');
 }
 class GitOps {

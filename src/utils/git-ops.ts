@@ -6,6 +6,7 @@ import { ActionConfig, GeneratedTest } from '../types';
 // [FIX #2] Sanitize strings for use in commit messages
 function sanitizeForCommitMessage(value: string): string {
   // Remove control characters and backticks that could affect git hooks or parsers
+  // eslint-disable-next-line no-control-regex
   return value.replace(/[`\x00-\x1f\x7f]/g, '');
 }
 
