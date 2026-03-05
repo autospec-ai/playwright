@@ -13,14 +13,20 @@ export class OpenAIProvider implements LLMClient {
     this.model = config.model || 'gpt-4o';
   }
 
+  private isReasoningModel(): boolean {
+    return /^(o[1-9]|gpt-5)/.test(this.model);
+  }
+
   async generate(
     messages: LLMMessage[],
     options?: { maxTokens?: number; temperature?: number }
   ): Promise<LLMResponse> {
+    const isReasoning = this.isReasoningModel();
     const response = await this.client.chat.completions.create({
       model: this.model,
-      max_tokens: options?.maxTokens ?? 8192,
-      temperature: options?.temperature ?? 0.2,
+      ...(isReasoning
+        ? { max_completion_tokens: options?.maxTokens ?? 8192 }
+        : { max_tokens: options?.maxTokens ?? 8192, temperature: options?.temperature ?? 0.2 }),
       messages: messages.map(m => ({
         role: m.role,
         content: m.content,
