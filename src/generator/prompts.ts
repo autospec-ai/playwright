@@ -23,6 +23,11 @@ export class PromptBuilder {
       .map(f => this.summarizeFile(f))
       .join('\n\n');
 
+    const fullSourceContext = diff.files
+      .filter(f => f.fullContent)
+      .map(f => this.formatFullSource(f))
+      .join('\n\n');
+
     return `You are an expert QA automation engineer. Analyze the following code changes and produce a test plan.
 
 ## Context
@@ -39,6 +44,8 @@ ${existingTestList || '(none found)'}
 ${diff.summary}
 
 ${fileChangeSummary}
+
+${fullSourceContext ? `## Full Source Files (for context)\nThe complete source of each changed file, so you can understand imports, component structure, routing, and how the changes fit into the broader codebase.\n\n${fullSourceContext}` : ''}
 
 ## Instructions
 1. Analyze what user-facing behavior changed or was added.
@@ -112,6 +119,16 @@ If no tests are needed (e.g., only config/docs changed), return:
       .filter(f => this.isRelated(f.filename, plan.targetFile))
       .slice(0, 3);
 
+    // Full source context for the target file and related files
+    const targetFullSource = targetDiff?.fullContent
+      ? `## Full Source: ${targetDiff.filename}\nThe complete file so you can see imports, component structure, routes, state, and how the diff fits in.\n\`\`\`typescript\n${targetDiff.fullContent}\n\`\`\``
+      : '';
+
+    const relatedFullSources = relatedDiffs
+      .filter(d => d.fullContent)
+      .map(d => this.formatFullSource(d))
+      .join('\n\n');
+
     return `You are an expert Playwright test author. Generate a production-quality E2E test file.
 
 ## Test Specification
@@ -124,10 +141,14 @@ If no tests are needed (e.g., only config/docs changed), return:
 ## User Flows to Test
 ${plan.userFlows.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
-## Source Code Changes
+${targetFullSource}
+
+## Source Code Changes (diff)
 ${targetDiff ? this.formatDiff(targetDiff) : '(target file diff not available)'}
 
 ${relatedDiffs.length > 0 ? '## Related Changes\n' + relatedDiffs.map(d => this.formatDiff(d)).join('\n\n') : ''}
+
+${relatedFullSources ? `## Related Full Sources\n${relatedFullSources}` : ''}
 
 ${styleReference ? `## Style Reference (match this pattern)\n\`\`\`typescript\n${styleReference}\n\`\`\`` : ''}
 
@@ -223,6 +244,13 @@ Generate a SEPARATE test case that runs an axe-core accessibility scan:
   }
 
   // ─── Helpers ───
+
+  private formatFullSource(file: FileDiff): string {
+    return `### ${file.filename} (full source)
+\`\`\`typescript
+${file.fullContent}
+\`\`\``;
+  }
 
   private summarizeFile(file: FileDiff): string {
     const maxPatchLines = 80;

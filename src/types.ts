@@ -38,6 +38,7 @@ export interface FileDiff {
   additions: number;
   deletions: number;
   previousFilename?: string;
+  fullContent?: string;    // full file content at HEAD (omitted for deleted files)
 }
 
 export interface DiffResult {

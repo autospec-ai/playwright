@@ -48,8 +48,33 @@ export class DiffAnalyzer {
     // Filter out non-source files (images, lockfiles, etc.)
     result.files = result.files.filter(f => this.isSourceFile(f.filename));
 
+    // Read full file contents at HEAD for non-deleted files
+    await this.loadFullContents(result);
+
     core.info(`Found ${result.files.length} relevant changed files after filtering`);
     return result;
+  }
+
+  // ─── Full File Content Loading ───
+
+  private static MAX_FILE_CONTENT_BYTES = 30_000; // ~30KB per file to stay within token budgets
+
+  private async loadFullContents(result: DiffResult): Promise<void> {
+    for (const file of result.files) {
+      if (file.status === 'deleted') continue;
+
+      try {
+        const content = await this.execGit('show', `${result.headSha}:${file.filename}`);
+        if (content.length <= DiffAnalyzer.MAX_FILE_CONTENT_BYTES) {
+          file.fullContent = content;
+        } else {
+          file.fullContent = content.slice(0, DiffAnalyzer.MAX_FILE_CONTENT_BYTES) + '\n// ... (truncated)';
+        }
+      } catch {
+        // Binary file or other read failure — skip
+        core.debug(`Could not read full content for ${file.filename}`);
+      }
+    }
   }
 
   private resolveMode(): DiffMode {

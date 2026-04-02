@@ -35997,8 +35997,31 @@ class DiffAnalyzer {
         result.files = this.filterFiles(result.files);
         // Filter out non-source files (images, lockfiles, etc.)
         result.files = result.files.filter(f => this.isSourceFile(f.filename));
+        // Read full file contents at HEAD for non-deleted files
+        await this.loadFullContents(result);
         core.info(`Found ${result.files.length} relevant changed files after filtering`);
         return result;
+    }
+    // ─── Full File Content Loading ───
+    static MAX_FILE_CONTENT_BYTES = 30_000; // ~30KB per file to stay within token budgets
+    async loadFullContents(result) {
+        for (const file of result.files) {
+            if (file.status === 'deleted')
+                continue;
+            try {
+                const content = await this.execGit('show', `${result.headSha}:${file.filename}`);
+                if (content.length <= DiffAnalyzer.MAX_FILE_CONTENT_BYTES) {
+                    file.fullContent = content;
+                }
+                else {
+                    file.fullContent = content.slice(0, DiffAnalyzer.MAX_FILE_CONTENT_BYTES) + '\n// ... (truncated)';
+                }
+            }
+            catch {
+                // Binary file or other read failure — skip
+                core.debug(`Could not read full content for ${file.filename}`);
+            }
+        }
     }
     resolveMode() {
         if (this.config.diffMode !== 'auto')
@@ -36190,6 +36213,10 @@ class PromptBuilder {
         const fileChangeSummary = diff.files
             .map(f => this.summarizeFile(f))
             .join('\n\n');
+        const fullSourceContext = diff.files
+            .filter(f => f.fullContent)
+            .map(f => this.formatFullSource(f))
+            .join('\n\n');
         return `You are an expert QA automation engineer. Analyze the following code changes and produce a test plan.
 
 ## Context
@@ -36206,6 +36233,8 @@ ${existingTestList || '(none found)'}
 ${diff.summary}
 
 ${fileChangeSummary}
+
+${fullSourceContext ? `## Full Source Files (for context)\nThe complete source of each changed file, so you can understand imports, component structure, routing, and how the changes fit into the broader codebase.\n\n${fullSourceContext}` : ''}
 
 ## Instructions
 1. Analyze what user-facing behavior changed or was added.
@@ -36270,6 +36299,14 @@ If no tests are needed (e.g., only config/docs changed), return:
             .filter(f => f.filename !== plan.targetFile)
             .filter(f => this.isRelated(f.filename, plan.targetFile))
             .slice(0, 3);
+        // Full source context for the target file and related files
+        const targetFullSource = targetDiff?.fullContent
+            ? `## Full Source: ${targetDiff.filename}\nThe complete file so you can see imports, component structure, routes, state, and how the diff fits in.\n\`\`\`typescript\n${targetDiff.fullContent}\n\`\`\``
+            : '';
+        const relatedFullSources = relatedDiffs
+            .filter(d => d.fullContent)
+            .map(d => this.formatFullSource(d))
+            .join('\n\n');
         return `You are an expert Playwright test author. Generate a production-quality E2E test file.
 
 ## Test Specification
@@ -36282,10 +36319,14 @@ If no tests are needed (e.g., only config/docs changed), return:
 ## User Flows to Test
 ${plan.userFlows.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
-## Source Code Changes
+${targetFullSource}
+
+## Source Code Changes (diff)
 ${targetDiff ? this.formatDiff(targetDiff) : '(target file diff not available)'}
 
 ${relatedDiffs.length > 0 ? '## Related Changes\n' + relatedDiffs.map(d => this.formatDiff(d)).join('\n\n') : ''}
+
+${relatedFullSources ? `## Related Full Sources\n${relatedFullSources}` : ''}
 
 ${styleReference ? `## Style Reference (match this pattern)\n\`\`\`typescript\n${styleReference}\n\`\`\`` : ''}
 
@@ -36369,6 +36410,12 @@ Generate a SEPARATE test case that runs an axe-core accessibility scan:
         return section;
     }
     // ─── Helpers ───
+    formatFullSource(file) {
+        return `### ${file.filename} (full source)
+\`\`\`typescript
+${file.fullContent}
+\`\`\``;
+    }
     summarizeFile(file) {
         const maxPatchLines = 80;
         const patchLines = file.patch.split('\n');
