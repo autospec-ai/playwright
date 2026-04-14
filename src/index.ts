@@ -207,6 +207,11 @@ function parseConfig(): ActionConfig {
     dryRun: core.getBooleanInput('dry_run'),
     customInstructions: core.getInput('custom_instructions') || '',
 
+    // Feature: Project Structure Discovery
+    pomPatterns: parseCSV(core.getInput('pom_patterns')),
+    utilityPatterns: parseCSV(core.getInput('utility_patterns')),
+    projectContextBudget: parseInt(core.getInput('project_context_budget') || '8000', 10),
+
     // Feature: Trace Viewer Integration
     traceOnFailure: core.getBooleanInput('trace_on_failure'),
     traceMode: rawTraceMode as TraceMode,

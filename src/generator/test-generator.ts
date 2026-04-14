@@ -14,6 +14,7 @@ import {
 import { PromptBuilder } from './prompts';
 import { TestPostProcessor } from '../utils/test-post-processor';
 import { FixtureExtractor } from '../utils/fixture-extractor';
+import { ProjectScanner } from '../discovery/project-scanner';
 
 // [FIX #3] Safe filename pattern: allow alphanumeric, hyphens, underscores, dots, forward slashes
 // but no '..' segments, no absolute paths, no backslashes
@@ -60,6 +61,11 @@ export class TestGenerator {
     // Step 1: Discover existing tests for style reference + dedup
     const existingTests = await this.discoverExistingTests();
     core.info(`Found ${existingTests.length} existing test files for reference`);
+
+    // Step 1b: Scan project structure for POM, utilities, and coverage
+    const scanner = new ProjectScanner(this.config);
+    const projectContext = await scanner.scan(diff);
+    this.prompts.setProjectContext(projectContext);
 
     // Step 2: Generate test plan
     const plan = await this.generatePlan(diff, existingTests);

@@ -78,6 +78,20 @@ inputs:
     required: false
     default: ''
 
+  # --- Project Structure Discovery ---
+  pom_patterns:
+    description: 'Comma-separated glob patterns for page object / POM files (e.g., **/pages/**/*.ts,**/*.page.ts). Auto-detected when empty.'
+    required: false
+    default: ''
+  utility_patterns:
+    description: 'Comma-separated glob patterns for helper/utility files (e.g., **/helpers/**/*.ts,**/utils/**/*.ts). Auto-detected when empty.'
+    required: false
+    default: ''
+  project_context_budget:
+    description: 'Approximate token budget for project context injected into LLM prompts'
+    required: false
+    default: '8000'
+
   # --- Trace Viewer Integration ---
   trace_on_failure:
     description: 'Enable Playwright trace collection for test failures'

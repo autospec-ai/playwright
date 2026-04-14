@@ -93,6 +93,41 @@ export interface TestPlanEntry {
   apiDependencies?: ApiDependency[];
 }
 
+// ─── Project Structure Discovery Types ───
+
+export interface LocatorInfo {
+  name: string;               // e.g. "submitButton"
+  selector: string;           // e.g. "page.getByRole('button', { name: 'Submit' })"
+  source: string;             // filepath where defined
+}
+
+export interface PageObjectInfo {
+  filepath: string;           // relative path
+  className: string;          // e.g. "LoginPage"
+  exportedMethods: string[];  // e.g. ["login(username, password)", "getErrorMessage()"]
+  locators: LocatorInfo[];    // extracted locator definitions
+}
+
+export interface UtilityInfo {
+  filepath: string;
+  exportedFunctions: string[];  // e.g. ["loginAsAdmin(page)", "clearDatabase()"]
+  exportedConstants: string[];  // e.g. ["BASE_URL", "DEFAULT_TIMEOUT"]
+}
+
+export interface TestCoverageInfo {
+  filepath: string;
+  routes: string[];              // URL paths tested (from goto/navigate)
+  importedPageObjects: string[]; // POM classes used
+  describedFlows: string[];      // test.describe names
+  testNames: string[];           // individual test() names
+}
+
+export interface ProjectContext {
+  pageObjects: PageObjectInfo[];
+  utilities: UtilityInfo[];
+  coverage: TestCoverageInfo[];
+}
+
 // ─── Action Configuration ───
 
 export type TraceMode = 'on' | 'off' | 'retain-on-failure' | 'on-first-retry';
@@ -111,6 +146,11 @@ export interface ActionConfig {
   maxTestFiles: number;
   dryRun: boolean;
   customInstructions: string;
+
+  // Feature: Project Structure Discovery
+  pomPatterns: string[];
+  utilityPatterns: string[];
+  projectContextBudget: number;
 
   // Feature: Trace Viewer Integration
   traceOnFailure: boolean;

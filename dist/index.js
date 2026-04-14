@@ -36188,13 +36188,405 @@ exports.DiffAnalyzer = DiffAnalyzer;
 
 /***/ }),
 
-/***/ 7670:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ 3836:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ProjectScanner = void 0;
+const core = __importStar(__nccwpck_require__(7484));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const glob_1 = __nccwpck_require__(1363);
+// Default patterns when user provides none
+const DEFAULT_POM_PATTERNS = [
+    '**/*.page.ts',
+    '**/pages/**/*.ts',
+    '**/page-objects/**/*.ts',
+    '**/page-object/**/*.ts',
+    '**/*.pom.ts',
+    '**/pom/**/*.ts',
+];
+const DEFAULT_UTILITY_PATTERNS = [
+    '**/helpers/**/*.ts',
+    '**/utils/**/*.ts',
+    '**/fixtures/**/*.ts',
+    '**/support/**/*.ts',
+    '**/*.helper.ts',
+    '**/*.util.ts',
+];
+const GLOBAL_IGNORE = ['**/node_modules/**', '**/dist/**', '**/.git/**', '**/*.d.ts', '**/*.min.*'];
+const MAX_FILE_SIZE = 30_000; // 30KB per file, matching existing convention
+class ProjectScanner {
+    config;
+    constructor(config) {
+        this.config = config;
+    }
+    async scan(diff) {
+        core.info('Scanning project structure for page objects, utilities, and test coverage...');
+        const [pageObjects, utilities, coverage] = await Promise.all([
+            this.discoverPageObjects(),
+            this.discoverUtilities(),
+            this.analyzeTestCoverage(),
+        ]);
+        core.info(`Discovered: ${pageObjects.length} page objects, ${utilities.length} utility files, ${coverage.length} tested files`);
+        // Score by relevance to the current diff and trim to budget
+        const scored = this.applyRelevanceAndBudget(pageObjects, utilities, coverage, diff);
+        return scored;
+    }
+    // ─── Page Object Discovery ───
+    async discoverPageObjects() {
+        const patterns = this.config.pomPatterns.length > 0
+            ? this.config.pomPatterns
+            : DEFAULT_POM_PATTERNS;
+        const files = await this.globFiles(patterns);
+        const results = [];
+        for (const filepath of files) {
+            const content = this.readFileSafe(filepath);
+            if (!content)
+                continue;
+            const info = this.extractPageObject(filepath, content);
+            if (info)
+                results.push(info);
+        }
+        return results;
+    }
+    extractPageObject(filepath, content) {
+        // Extract class name
+        const classMatch = content.match(/export\s+(?:default\s+)?class\s+(\w+)/);
+        if (!classMatch)
+            return null;
+        const className = classMatch[1];
+        const rel = path.relative(process.cwd(), filepath);
+        // Extract method signatures (public methods in the class)
+        const methods = [];
+        const methodRegex = /(?:async\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*[^{]+?)?\s*\{/g;
+        let match;
+        while ((match = methodRegex.exec(content)) !== null) {
+            const name = match[1];
+            const params = match[2].trim();
+            // Skip constructor and private-looking methods
+            if (name === 'constructor' || name.startsWith('_'))
+                continue;
+            methods.push(params ? `${name}(${params})` : `${name}()`);
+        }
+        // Extract locator definitions
+        const locators = this.extractLocators(rel, content);
+        return { filepath: rel, className, exportedMethods: methods, locators };
+    }
+    extractLocators(filepath, content) {
+        const locators = [];
+        // Pattern: this.someLocator = page.getByRole/getByText/getByTestId/locator(...)
+        const assignmentRegex = /(?:this\.)?(\w+)\s*=\s*((?:page|this\.page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
+        let match;
+        while ((match = assignmentRegex.exec(content)) !== null) {
+            locators.push({ name: match[1], selector: match[2], source: filepath });
+        }
+        // Pattern: get someLocator() { return this.page.getByRole(...) }
+        const getterRegex = /get\s+(\w+)\s*\(\)\s*\{[^}]*return\s+((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
+        while ((match = getterRegex.exec(content)) !== null) {
+            locators.push({ name: match[1], selector: match[2], source: filepath });
+        }
+        // Pattern: readonly someLocator = this.page.getByRole(...)
+        const readonlyRegex = /(?:readonly\s+)(\w+)\s*=\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
+        while ((match = readonlyRegex.exec(content)) !== null) {
+            locators.push({ name: match[1], selector: match[2], source: filepath });
+        }
+        return locators;
+    }
+    // ─── Utility Discovery ───
+    async discoverUtilities() {
+        const patterns = this.config.utilityPatterns.length > 0
+            ? this.config.utilityPatterns
+            : DEFAULT_UTILITY_PATTERNS;
+        const files = await this.globFiles(patterns);
+        const results = [];
+        for (const filepath of files) {
+            const content = this.readFileSafe(filepath);
+            if (!content)
+                continue;
+            const info = this.extractUtility(filepath, content);
+            if (info)
+                results.push(info);
+        }
+        return results;
+    }
+    extractUtility(filepath, content) {
+        const rel = path.relative(process.cwd(), filepath);
+        const functions = [];
+        const constants = [];
+        // Exported functions
+        const fnRegex = /export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/g;
+        let match;
+        while ((match = fnRegex.exec(content)) !== null) {
+            const name = match[1];
+            const params = match[2].trim();
+            functions.push(params ? `${name}(${params})` : `${name}()`);
+        }
+        // Exported arrow functions: export const foo = async (params) => ...
+        const arrowRegex = /export\s+const\s+(\w+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::\s*[^=]+?)?\s*=>/g;
+        while ((match = arrowRegex.exec(content)) !== null) {
+            const name = match[1];
+            const params = match[2].trim();
+            functions.push(params ? `${name}(${params})` : `${name}()`);
+        }
+        // Exported constants (non-function)
+        const constRegex = /export\s+const\s+(\w+)\s*(?::\s*[^=]+?)?\s*=\s*(?!(?:async\s*)?\()/g;
+        while ((match = constRegex.exec(content)) !== null) {
+            constants.push(match[1]);
+        }
+        if (functions.length === 0 && constants.length === 0)
+            return null;
+        return { filepath: rel, exportedFunctions: functions, exportedConstants: constants };
+    }
+    // ─── Test Coverage Analysis ───
+    async analyzeTestCoverage() {
+        const results = [];
+        const seen = new Set();
+        for (const pattern of this.config.testPatterns) {
+            const matches = await (0, glob_1.glob)(pattern, { absolute: true, ignore: GLOBAL_IGNORE });
+            for (const filepath of matches) {
+                if (results.length >= 50)
+                    break;
+                const rel = path.relative(process.cwd(), filepath);
+                if (seen.has(rel))
+                    continue;
+                seen.add(rel);
+                const content = this.readFileSafe(filepath);
+                if (!content)
+                    continue;
+                const info = this.extractCoverage(rel, content);
+                if (info)
+                    results.push(info);
+            }
+            if (results.length >= 50)
+                break;
+        }
+        return results;
+    }
+    extractCoverage(filepath, content) {
+        const routes = [];
+        const importedPageObjects = [];
+        const describedFlows = [];
+        const testNames = [];
+        // Routes: page.goto('...') or page.navigate('...')
+        const routeRegex = /(?:page\.goto|page\.navigate)\s*\(\s*['"`]([^'"`]+)/g;
+        let match;
+        while ((match = routeRegex.exec(content)) !== null) {
+            routes.push(match[1]);
+        }
+        // Imported page objects: import { LoginPage } from '...'
+        const importRegex = /import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
+        while ((match = importRegex.exec(content)) !== null) {
+            const importPath = match[2];
+            // Heuristic: if the import path contains 'page', 'pom', or 'object', it's likely a POM import
+            if (/page|pom|object/i.test(importPath)) {
+                const names = match[1].split(',').map(s => s.trim()).filter(Boolean);
+                importedPageObjects.push(...names);
+            }
+        }
+        // test.describe names
+        const describeRegex = /test\.describe\s*\(\s*['"`]([^'"`]+)/g;
+        while ((match = describeRegex.exec(content)) !== null) {
+            describedFlows.push(match[1]);
+        }
+        // test() names
+        const testRegex = /\btest\s*\(\s*['"`]([^'"`]+)/g;
+        while ((match = testRegex.exec(content)) !== null) {
+            testNames.push(match[1]);
+        }
+        if (routes.length === 0 && testNames.length === 0)
+            return null;
+        return { filepath, routes, importedPageObjects, describedFlows, testNames };
+    }
+    // ─── Relevance Scoring & Token Budget ───
+    applyRelevanceAndBudget(pageObjects, utilities, coverage, diff) {
+        const budget = this.config.projectContextBudget;
+        const pomBudget = Math.floor(budget * 0.5);
+        const utilBudget = Math.floor(budget * 0.2);
+        const coverageBudget = Math.floor(budget * 0.3);
+        // Score and sort page objects
+        const scoredPom = pageObjects
+            .map(po => ({ item: po, score: this.scoreRelevance(po.filepath, po.className, diff) }))
+            .sort((a, b) => b.score - a.score);
+        // Score and sort utilities
+        const scoredUtil = utilities
+            .map(u => ({ item: u, score: this.scoreRelevance(u.filepath, null, diff) }))
+            .sort((a, b) => b.score - a.score);
+        // Trim to budget
+        const trimmedPom = this.trimToTokenBudget(scoredPom.map(s => s.item), pomBudget, (po) => this.estimatePageObjectTokens(po));
+        const trimmedUtil = this.trimToTokenBudget(scoredUtil.map(s => s.item), utilBudget, (u) => this.estimateUtilityTokens(u));
+        const trimmedCoverage = this.trimToTokenBudget(coverage, coverageBudget, (c) => this.estimateCoverageTokens(c));
+        return {
+            pageObjects: trimmedPom,
+            utilities: trimmedUtil,
+            coverage: trimmedCoverage,
+        };
+    }
+    scoreRelevance(filepath, className, diff) {
+        let score = 1; // base score
+        const changedFiles = diff.files;
+        const fileDir = path.dirname(filepath);
+        for (const changed of changedFiles) {
+            // Check if any changed file imports this file
+            if (changed.fullContent && this.contentReferencesFile(changed.fullContent, filepath)) {
+                score += 10;
+            }
+            // Same directory
+            if (path.dirname(changed.filename) === fileDir) {
+                score += 5;
+            }
+            // Class/function name appears in changed file content
+            if (className && changed.fullContent && changed.fullContent.includes(className)) {
+                score += 3;
+            }
+        }
+        return score;
+    }
+    contentReferencesFile(content, filepath) {
+        // Check if the content imports from this filepath (with or without extension)
+        const withoutExt = filepath.replace(/\.\w+$/, '');
+        const basename = path.basename(withoutExt);
+        return content.includes(basename);
+    }
+    trimToTokenBudget(items, budgetTokens, estimator) {
+        const result = [];
+        let usedTokens = 0;
+        for (const item of items) {
+            const cost = estimator(item);
+            if (usedTokens + cost > budgetTokens)
+                break;
+            result.push(item);
+            usedTokens += cost;
+        }
+        return result;
+    }
+    estimatePageObjectTokens(po) {
+        let chars = po.filepath.length + po.className.length;
+        chars += po.exportedMethods.join(', ').length;
+        chars += po.locators.map(l => `${l.name}: ${l.selector}`).join(', ').length;
+        return Math.ceil(chars / 4);
+    }
+    estimateUtilityTokens(u) {
+        let chars = u.filepath.length;
+        chars += u.exportedFunctions.join(', ').length;
+        chars += u.exportedConstants.join(', ').length;
+        return Math.ceil(chars / 4);
+    }
+    estimateCoverageTokens(c) {
+        let chars = c.filepath.length;
+        chars += c.routes.join(', ').length;
+        chars += c.describedFlows.join(', ').length;
+        chars += c.testNames.join(', ').length;
+        return Math.ceil(chars / 4);
+    }
+    // ─── File Helpers ───
+    async globFiles(patterns) {
+        const seen = new Set();
+        const results = [];
+        for (const pattern of patterns) {
+            const matches = await (0, glob_1.glob)(pattern, { absolute: true, ignore: GLOBAL_IGNORE });
+            for (const filepath of matches) {
+                if (!seen.has(filepath)) {
+                    seen.add(filepath);
+                    results.push(filepath);
+                }
+            }
+        }
+        return results;
+    }
+    readFileSafe(filepath) {
+        try {
+            const stat = fs.statSync(filepath);
+            if (stat.size > MAX_FILE_SIZE)
+                return null;
+            return fs.readFileSync(filepath, 'utf-8');
+        }
+        catch {
+            return null;
+        }
+    }
+}
+exports.ProjectScanner = ProjectScanner;
+
+
+/***/ }),
+
+/***/ 7670:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.PromptBuilder = void 0;
+const path = __importStar(__nccwpck_require__(6928));
 /**
  * Builds structured prompts for two-phase test generation:
  *   Phase 1: Analyze diff → produce a test plan (JSON)
@@ -36202,8 +36594,12 @@ exports.PromptBuilder = void 0;
  */
 class PromptBuilder {
     config;
+    projectContext;
     constructor(config) {
         this.config = config;
+    }
+    setProjectContext(ctx) {
+        this.projectContext = ctx;
     }
     // ─── Phase 1: Test Planning ───
     buildPlanPrompt(diff, existingTests) {
@@ -36235,14 +36631,17 @@ ${diff.summary}
 ${fileChangeSummary}
 
 ${fullSourceContext ? `## Full Source Files (for context)\nThe complete source of each changed file, so you can understand imports, component structure, routing, and how the changes fit into the broader codebase.\n\n${fullSourceContext}` : ''}
-
+${this.buildProjectContextForPlan()}
 ## Instructions
 1. Analyze what user-facing behavior changed or was added.
 2. Identify the E2E test scenarios that would validate these changes.
 3. Skip changes that are purely internal/backend with no UI impact, unless they affect API responses rendered in the UI.
 4. Prioritize: new features > modified flows > edge cases.
 5. Don't duplicate coverage already in existing tests unless the behavior changed.
-6. Assign a severity to each test based on the user impact of what it validates:
+6. MUST reuse existing page objects and their locators listed above rather than inventing new ones.
+7. MUST use existing utility functions where applicable.
+8. Do NOT generate tests for user flows already covered in existing test coverage unless the behavior changed in this diff.
+9. Assign a severity to each test based on the user impact of what it validates:
    - sev1 (Critical): Core user flows — authentication, checkout, data loss prevention, payment processing
    - sev2 (High): Important features, commonly used paths, key business logic
    - sev3 (Medium): Secondary features, less frequent user flows, settings pages
@@ -36329,13 +36728,13 @@ ${relatedDiffs.length > 0 ? '## Related Changes\n' + relatedDiffs.map(d => this.
 ${relatedFullSources ? `## Related Full Sources\n${relatedFullSources}` : ''}
 
 ${styleReference ? `## Style Reference (match this pattern)\n\`\`\`typescript\n${styleReference}\n\`\`\`` : ''}
-
+${this.buildProjectContextForTest(plan.testFilename)}
 ## Requirements
 1. Use Playwright test runner with TypeScript.
 2. Import from '@playwright/test' (test, expect, Page).
 3. Use test.describe() blocks to group related tests.
 4. Use descriptive test names that explain the expected behavior.
-5. Use page object patterns where it reduces duplication.
+5. Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects. Do NOT invent page objects or utility functions that are not listed.
 6. Add meaningful assertions — not just "page loads".
 7. Use data-testid selectors when inferrable, otherwise use accessible selectors (role, label, text).
 8. Handle async operations with proper waitFor / expect patterns.
@@ -36408,6 +36807,106 @@ Generate a SEPARATE test case that runs an axe-core accessibility scan:
 `;
         }
         return section;
+    }
+    // ─── Project Context Sections ───
+    buildProjectContextForPlan() {
+        if (!this.projectContext)
+            return '';
+        const sections = [];
+        // Page objects catalog
+        if (this.projectContext.pageObjects.length > 0) {
+            const items = this.projectContext.pageObjects.map(po => {
+                const methods = po.exportedMethods.length > 0
+                    ? `: ${po.exportedMethods.join(', ')}`
+                    : '';
+                const locatorNames = po.locators.map(l => l.name);
+                const locators = locatorNames.length > 0
+                    ? ` | Locators: ${locatorNames.join(', ')}`
+                    : '';
+                return `- ${po.className} (${po.filepath})${methods}${locators}`;
+            }).join('\n');
+            sections.push(`## Available Page Objects
+The project already has these page object classes. REUSE them — do not invent new ones.
+${items}`);
+        }
+        // Utilities catalog
+        if (this.projectContext.utilities.length > 0) {
+            const items = this.projectContext.utilities.map(u => {
+                const fns = u.exportedFunctions.length > 0
+                    ? u.exportedFunctions.join(', ')
+                    : '';
+                return `- ${u.filepath}: ${fns}`;
+            }).join('\n');
+            sections.push(`## Available Utilities
+These helper functions exist in the project. Use them instead of writing inline equivalents.
+${items}`);
+        }
+        // Coverage summary
+        if (this.projectContext.coverage.length > 0) {
+            const allRoutes = [...new Set(this.projectContext.coverage.flatMap(c => c.routes))];
+            const allFlows = [...new Set(this.projectContext.coverage.flatMap(c => c.describedFlows))];
+            const parts = [];
+            if (allRoutes.length > 0) {
+                parts.push(`Already tested routes: ${allRoutes.join(', ')}`);
+            }
+            if (allFlows.length > 0) {
+                parts.push(`Already tested flows: ${allFlows.join(', ')}`);
+            }
+            if (parts.length > 0) {
+                sections.push(`## Existing Test Coverage
+${parts.join('\n')}`);
+            }
+        }
+        return sections.length > 0 ? '\n' + sections.join('\n\n') + '\n' : '';
+    }
+    buildProjectContextForTest(testFilename) {
+        if (!this.projectContext)
+            return '';
+        const sections = [];
+        const testOutputPath = path.join(this.config.testDirectory, testFilename);
+        const testDir = path.dirname(testOutputPath);
+        // Page objects with import paths
+        if (this.projectContext.pageObjects.length > 0) {
+            const items = this.projectContext.pageObjects.map(po => {
+                const relativePath = this.computeImportPath(testDir, po.filepath);
+                const methodList = po.exportedMethods.length > 0
+                    ? `Methods: ${po.exportedMethods.join(', ')}`
+                    : '';
+                const locatorList = po.locators.length > 0
+                    ? `Locators: ${po.locators.map(l => `${l.name} = ${l.selector}`).join(', ')}`
+                    : '';
+                const details = [methodList, locatorList].filter(Boolean).join('\n');
+                return `### ${po.className} (from '${relativePath}')
+${details}`;
+            }).join('\n\n');
+            sections.push(`## Page Objects Available for Import
+${items}`);
+        }
+        // Utilities with import paths
+        if (this.projectContext.utilities.length > 0) {
+            const items = this.projectContext.utilities.map(u => {
+                const relativePath = this.computeImportPath(testDir, u.filepath);
+                const fns = u.exportedFunctions.join(', ');
+                return `- import { ${fns} } from '${relativePath}'`;
+            }).join('\n');
+            sections.push(`## Utility Functions Available
+${items}`);
+        }
+        if (sections.length > 0) {
+            sections.push(`## IMPORTANT
+- Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects.
+- Do NOT invent page objects, locators, or utility functions that are not listed above.
+- Import paths above are relative from the test file location.`);
+        }
+        return sections.length > 0 ? '\n' + sections.join('\n\n') + '\n' : '';
+    }
+    computeImportPath(fromDir, toFilepath) {
+        const withoutExt = toFilepath.replace(/\.\w+$/, '');
+        let rel = path.relative(fromDir, withoutExt);
+        if (!rel.startsWith('.')) {
+            rel = './' + rel;
+        }
+        return rel;
     }
     // ─── Helpers ───
     formatFullSource(file) {
@@ -36510,6 +37009,7 @@ const glob_1 = __nccwpck_require__(1363);
 const prompts_1 = __nccwpck_require__(7670);
 const test_post_processor_1 = __nccwpck_require__(9213);
 const fixture_extractor_1 = __nccwpck_require__(1797);
+const project_scanner_1 = __nccwpck_require__(3836);
 // [FIX #3] Safe filename pattern: allow alphanumeric, hyphens, underscores, dots, forward slashes
 // but no '..' segments, no absolute paths, no backslashes
 const SAFE_FILENAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$/;
@@ -36549,6 +37049,10 @@ class TestGenerator {
         // Step 1: Discover existing tests for style reference + dedup
         const existingTests = await this.discoverExistingTests();
         core.info(`Found ${existingTests.length} existing test files for reference`);
+        // Step 1b: Scan project structure for POM, utilities, and coverage
+        const scanner = new project_scanner_1.ProjectScanner(this.config);
+        const projectContext = await scanner.scan(diff);
+        this.prompts.setProjectContext(projectContext);
         // Step 2: Generate test plan
         const plan = await this.generatePlan(diff, existingTests);
         if (plan.tests.length === 0) {
@@ -36954,6 +37458,10 @@ function parseConfig() {
         maxTestFiles: rawMax,
         dryRun: core.getBooleanInput('dry_run'),
         customInstructions: core.getInput('custom_instructions') || '',
+        // Feature: Project Structure Discovery
+        pomPatterns: parseCSV(core.getInput('pom_patterns')),
+        utilityPatterns: parseCSV(core.getInput('utility_patterns')),
+        projectContextBudget: parseInt(core.getInput('project_context_budget') || '8000', 10),
         // Feature: Trace Viewer Integration
         traceOnFailure: core.getBooleanInput('trace_on_failure'),
         traceMode: rawTraceMode,
