@@ -43,6 +43,33 @@ test('example', async ({ page }) => {});`;
       expect(result).toContain("test.describe('Login'");
       expect(result).toContain("await page.goto('/login')");
     });
+
+    it('does not inject inside class bodies when stray imports appear mid-file', () => {
+      const codeWithInlineClass = `import { expect, test } from '../../fixtures/base';
+import { CustomDashboards } from '../../pages/dashboards/custom-dashboards.po';
+
+let customDashboards: CustomDashboards;
+
+test.describe('Case Flow', () => {
+  test('chart is visible', async () => {});
+});
+import { Locator } from '@playwright/test';
+import { Base } from '../../pages/base.po';
+
+export class CustomDashboards extends Base {
+  elements = {
+    getChart: (): Locator => this.page.getByTestId('chart'),
+  };
+}`;
+
+      const result = TestPostProcessor.injectTraceConfig(codeWithInlineClass, 'retain-on-failure');
+      // The test.use block should appear AFTER the first two imports, not after the mid-file imports
+      const testUseIndex = result.indexOf('test.use({');
+      const classIndex = result.indexOf('export class');
+      expect(testUseIndex).toBeGreaterThan(-1);
+      expect(classIndex).toBeGreaterThan(-1);
+      expect(testUseIndex).toBeLessThan(classIndex);
+    });
   });
 
   describe('ensureAxeImport', () => {

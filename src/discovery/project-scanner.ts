@@ -90,6 +90,9 @@ export class ProjectScanner {
 
     // Extract method signatures (public methods in the class)
     const methods: string[] = [];
+    const seen = new Set<string>();
+
+    // Standard methods: async methodName(params) { ... }
     const methodRegex = /(?:async\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*[^{]+?)?\s*\{/g;
     let match;
     while ((match = methodRegex.exec(content)) !== null) {
@@ -97,13 +100,56 @@ export class ProjectScanner {
       const params = match[2].trim();
       // Skip constructor and private-looking methods
       if (name === 'constructor' || name.startsWith('_')) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
       methods.push(params ? `${name}(${params})` : `${name}()`);
+    }
+
+    // Static properties/methods: static propName = value or static methodName()
+    const staticRegex = /static\s+(?:readonly\s+)?(\w+)\s*[=:]/g;
+    while ((match = staticRegex.exec(content)) !== null) {
+      const name = match[1];
+      if (!seen.has(name)) {
+        seen.add(name);
+        methods.push(`static ${name}`);
+      }
     }
 
     // Extract locator definitions
     const locators = this.extractLocators(rel, content);
 
-    return { filepath: rel, className, exportedMethods: methods, locators };
+    // Extract navigation routes from goto/navigate methods
+    const routes = this.extractRoutes(content);
+
+    return { filepath: rel, className, exportedMethods: methods, locators, routes };
+  }
+
+  private extractRoutes(content: string): string[] {
+    const routes: string[] = [];
+    const seen = new Set<string>();
+
+    // Pattern: this.page.goto('...') or page.goto('...')
+    const gotoRegex = /(?:this\.page|page)\.goto\s*\(\s*['"`]([^'"`$]+)['"`]/g;
+    let match;
+    while ((match = gotoRegex.exec(content)) !== null) {
+      const route = match[1];
+      if (!seen.has(route)) {
+        seen.add(route);
+        routes.push(route);
+      }
+    }
+
+    // Pattern: this.page.goto(path ?? '/default') — extract the default
+    const defaultGotoRegex = /(?:this\.page|page)\.goto\s*\(\s*\w+\s*\?\?\s*['"`]([^'"`]+)['"`]/g;
+    while ((match = defaultGotoRegex.exec(content)) !== null) {
+      const route = match[1];
+      if (!seen.has(route)) {
+        seen.add(route);
+        routes.push(route);
+      }
+    }
+
+    return routes;
   }
 
   private extractLocators(filepath: string, content: string): LocatorInfo[] {
@@ -126,6 +172,18 @@ export class ProjectScanner {
     const readonlyRegex = /(?:readonly\s+)(\w+)\s*=\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
     while ((match = readonlyRegex.exec(content)) !== null) {
       locators.push({ name: match[1], selector: match[2], source: filepath });
+    }
+
+    // Pattern: arrow function in object literal — getName: (): Locator => this.page.getByTestId(...)
+    // Also matches with parameters: getByName: (name: string): Locator => this.page.locator(...)
+    // This is a common POM pattern where elements are organized as object properties.
+    const arrowRegex = /(\w+)\s*:\s*\([^)]*\)\s*(?::\s*\w+)?\s*=>\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
+    while ((match = arrowRegex.exec(content)) !== null) {
+      const name = match[1];
+      // Skip duplicates — earlier patterns may have caught some of these
+      if (!locators.some(l => l.name === name)) {
+        locators.push({ name, selector: match[2], source: filepath });
+      }
     }
 
     return locators;
@@ -352,6 +410,7 @@ export class ProjectScanner {
     let chars = po.filepath.length + po.className.length;
     chars += po.exportedMethods.join(', ').length;
     chars += po.locators.map(l => `${l.name}: ${l.selector}`).join(', ').length;
+    chars += po.routes.join(', ').length;
     return Math.ceil(chars / 4);
   }
 

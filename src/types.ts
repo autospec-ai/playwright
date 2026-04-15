@@ -106,6 +106,7 @@ export interface PageObjectInfo {
   className: string;          // e.g. "LoginPage"
   exportedMethods: string[];  // e.g. ["login(username, password)", "getErrorMessage()"]
   locators: LocatorInfo[];    // extracted locator definitions
+  routes: string[];           // navigation URLs from goto/navigate methods
 }
 
 export interface UtilityInfo {

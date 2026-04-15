@@ -26,18 +26,40 @@ export class TestPostProcessor {
       '',
     ].join('\n');
 
-    // Find the end of the import block (last line starting with "import")
+    // Find the end of the import block (last contiguous import at the top of the file).
+    // Stop scanning once we hit actual code (test, class, const, let, etc.) to avoid
+    // inserting inside class bodies when the LLM emits stray imports mid-file.
     const lines = code.split('\n');
     let lastImportIndex = -1;
+    let inMultiLineImport = false;
     for (let i = 0; i < lines.length; i++) {
       const trimmed = lines[i].trimStart();
+
+      // Track multi-line imports: import { \n  Foo,\n  Bar\n } from '...';
+      if (inMultiLineImport) {
+        if (trimmed.startsWith('}') || trimmed.includes("} from ")) {
+          lastImportIndex = i;
+          inMultiLineImport = false;
+        }
+        continue;
+      }
+
       if (trimmed.startsWith('import ') || trimmed.startsWith('import{')) {
         lastImportIndex = i;
+        // Check if this is a multi-line import (has { but no closing } on same line)
+        if (trimmed.includes('{') && !trimmed.includes('}')) {
+          inMultiLineImport = true;
+        }
+        continue;
       }
-      // Also handle multi-line imports: find closing }
-      if (lastImportIndex >= 0 && trimmed.startsWith('}') && lines[lastImportIndex]?.includes('{')) {
-        lastImportIndex = i;
+
+      // Skip blank lines and comments between imports
+      if (trimmed === '' || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+        continue;
       }
+
+      // Any other code means the import block is over — stop scanning
+      break;
     }
 
     if (lastImportIndex === -1) {

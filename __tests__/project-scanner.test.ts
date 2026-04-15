@@ -122,6 +122,46 @@ export class DashboardPage {
       expect(ctx.pageObjects[0].locators.map(l => l.name)).toContain('addButton');
     });
 
+    it('extracts arrow-function locators in elements object', async () => {
+      writeFile('e2e/pages/dashboards/custom-dashboards.po.ts', `
+import { Locator, Page } from '@playwright/test';
+
+export class CustomDashboards {
+  constructor(private page: Page) {}
+
+  elements = {
+    getWidgets: (): Locator => this.page.locator('[id*="custom-dashboard-widget"]'),
+    getEditButton: (): Locator => this.page.getByTestId('edit-dashboard-btn'),
+    getWidgetByName: (name: string): Locator => this.page.locator(\`[id*="widget"]:has-text("\${name}")\`),
+    v3Elements: {
+      getDashboardGrid: (): Locator => this.page.locator('scwx-custom-dashboard-widget-grid-v3'),
+    },
+  };
+
+  async goto(path?: string): Promise<void> {
+    await this.page.goto(path ?? '/dashboards/custom');
+    await this.waitForSpinner();
+  }
+}
+`);
+
+      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.po.ts')] });
+      const scanner = new ProjectScanner(config);
+      const ctx = await scanner.scan(makeDiff());
+
+      expect(ctx.pageObjects).toHaveLength(1);
+      expect(ctx.pageObjects[0].className).toBe('CustomDashboards');
+
+      const locatorNames = ctx.pageObjects[0].locators.map(l => l.name);
+      expect(locatorNames).toContain('getWidgets');
+      expect(locatorNames).toContain('getEditButton');
+      expect(locatorNames).toContain('getWidgetByName');
+      expect(locatorNames).toContain('getDashboardGrid');
+
+      // Should extract routes from goto() method
+      expect(ctx.pageObjects[0].routes).toContain('/dashboards/custom');
+    });
+
     it('skips files without exported classes', async () => {
       writeFile('e2e/pages/constants.page.ts', `
 export const LOGIN_URL = '/login';

@@ -62,6 +62,7 @@ function makeProjectContext(): ProjectContext {
           { name: 'usernameInput', selector: "page.getByRole('textbox', { name: 'Username' })", source: 'e2e/pages/login.page.ts' },
           { name: 'submitButton', selector: "page.getByRole('button', { name: 'Sign in' })", source: 'e2e/pages/login.page.ts' },
         ],
+        routes: ['/login'],
       },
     ],
     utilities: [

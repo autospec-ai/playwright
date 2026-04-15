@@ -278,7 +278,10 @@ Generate a SEPARATE test case that runs an axe-core accessibility scan:
         const locators = locatorNames.length > 0
           ? ` | Locators: ${locatorNames.join(', ')}`
           : '';
-        return `- ${po.className} (${po.filepath})${methods}${locators}`;
+        const routes = po.routes.length > 0
+          ? ` | Routes: ${po.routes.join(', ')}`
+          : '';
+        return `- ${po.className} (${po.filepath})${methods}${locators}${routes}`;
       }).join('\n');
 
       sections.push(`## Available Page Objects
@@ -339,7 +342,10 @@ ${parts.join('\n')}`);
         const locatorList = po.locators.length > 0
           ? `Locators: ${po.locators.map(l => `${l.name} = ${l.selector}`).join(', ')}`
           : '';
-        const details = [methodList, locatorList].filter(Boolean).join('\n');
+        const routeList = po.routes.length > 0
+          ? `Navigation routes: ${po.routes.join(', ')}`
+          : '';
+        const details = [methodList, locatorList, routeList].filter(Boolean).join('\n');
         return `### ${po.className} (from '${relativePath}')
 ${details}`;
       }).join('\n\n');
