@@ -119,6 +119,28 @@ Update baselines after intentional UI changes:
 npx playwright test --update-snapshots
 ```
 
+### Project Structure Discovery
+AutoSpec scans your project for existing page objects, utility functions, and test coverage before generating tests. This prevents the LLM from hallucinating locators, POM classes, or helpers that don't exist — and ensures generated tests reuse what's already there with correct import paths.
+
+**What it discovers:**
+- **Page Objects** — Classes with locators (`getByRole`, `getByTestId`, `locator`) and public methods
+- **Utilities** — Exported helper functions and constants
+- **Test Coverage** — Routes, flows, and page objects already under test
+
+**Auto-detection** works out of the box for common conventions (`**/pages/**/*.ts`, `**/*.page.ts`, `**/helpers/**/*.ts`, etc.). If your project uses different naming, configure the patterns explicitly:
+
+```yaml
+- uses: autospec-ai/action@v1
+  with:
+    llm_api_key: ${{ secrets.OPENAI_API_KEY }}
+    test_directory: 'e2e/tests'                        # where to write generated tests
+    pom_patterns: '**/*.po.ts,**/pageobjects/**/*.ts'  # match your POM convention
+    utility_patterns: '**/helpers/**/*.ts'              # match your utility convention
+    project_context_budget: '10000'                     # increase if you have many POMs
+```
+
+**Tip:** Check the Action logs for `Discovered: X page objects, Y utility files, Z tested files` to verify the scanner is finding your project's artifacts. If the counts are 0, your file naming doesn't match the default patterns — set `pom_patterns` and `utility_patterns` explicitly.
+
 ### Aria Snapshot Assertions
 Adds `toMatchAriaSnapshot()` assertions to validate accessibility tree structure. Optionally generates a dedicated axe-core scan test case.
 
@@ -174,6 +196,18 @@ axe_standard: 'wcag2aa'  # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
 | `visual_threshold` | `0.2` | Pixel comparison threshold (0-1) |
 | `visual_max_diff_ratio` | `0.05` | Maximum allowed diff pixel ratio (0-1) |
 | `visual_full_page` | `false` | Capture full-page screenshots instead of viewport only |
+
+### Project Structure Discovery
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `pom_patterns` | *(auto-detected)* | Comma-separated globs for page object files (e.g., `**/*.po.ts,**/pages/**/*.ts`) |
+| `utility_patterns` | *(auto-detected)* | Comma-separated globs for helper/utility files (e.g., `**/helpers/**/*.ts`) |
+| `project_context_budget` | `8000` | Approximate token budget for project context injected into LLM prompts |
+
+When left empty, the scanner uses built-in patterns:
+- **Page Objects:** `**/*.page.ts`, `**/pages/**/*.ts`, `**/page-objects/**/*.ts`, `**/*.pom.ts`, `**/pom/**/*.ts`
+- **Utilities:** `**/helpers/**/*.ts`, `**/utils/**/*.ts`, `**/fixtures/**/*.ts`, `**/support/**/*.ts`, `**/*.helper.ts`, `**/*.util.ts`
 
 ### Accessibility
 
@@ -324,6 +358,8 @@ src/
 │   └── openai.ts               # OpenAI / compatible client
 ├── diff/
 │   └── analyzer.ts             # Git diff extraction & filtering
+├── discovery/
+│   └── project-scanner.ts      # Scans for existing POMs, utilities, and test coverage
 ├── generator/
 │   ├── prompts.ts              # Two-phase prompt construction with feature-conditional sections
 │   └── test-generator.ts       # Orchestrates planning + generation + post-processing

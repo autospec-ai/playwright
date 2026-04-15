@@ -18,6 +18,14 @@ export class PromptBuilder {
     this.projectContext = ctx;
   }
 
+  /** Returns true when the scanner discovered page objects or utilities. */
+  private hasProjectArtifacts(): boolean {
+    return !!this.projectContext && (
+      this.projectContext.pageObjects.length > 0 ||
+      this.projectContext.utilities.length > 0
+    );
+  }
+
   // ─── Phase 1: Test Planning ───
 
   buildPlanPrompt(diff: DiffResult, existingTests: ExistingTest[]): string {
@@ -59,10 +67,11 @@ ${this.buildProjectContextForPlan()}
 3. Skip changes that are purely internal/backend with no UI impact, unless they affect API responses rendered in the UI.
 4. Prioritize: new features > modified flows > edge cases.
 5. Don't duplicate coverage already in existing tests unless the behavior changed.
-6. MUST reuse existing page objects and their locators listed above rather than inventing new ones.
+${this.hasProjectArtifacts() ? `6. MUST reuse existing page objects and their locators listed above rather than inventing new ones.
 7. MUST use existing utility functions where applicable.
 8. Do NOT generate tests for user flows already covered in existing test coverage unless the behavior changed in this diff.
-9. Assign a severity to each test based on the user impact of what it validates:
+9.` : `6. Do NOT generate tests for user flows already covered in existing test coverage unless the behavior changed in this diff.
+7.`} Assign a severity to each test based on the user impact of what it validates:
    - sev1 (Critical): Core user flows — authentication, checkout, data loss prevention, payment processing
    - sev2 (High): Important features, commonly used paths, key business logic
    - sev3 (Medium): Secondary features, less frequent user flows, settings pages
@@ -166,7 +175,7 @@ ${this.buildProjectContextForTest(plan.testFilename)}
 2. Import from '@playwright/test' (test, expect, Page).
 3. Use test.describe() blocks to group related tests.
 4. Use descriptive test names that explain the expected behavior.
-5. Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects. Do NOT invent page objects or utility functions that are not listed.
+${this.hasProjectArtifacts() ? `5. Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects. Do NOT invent page objects or utility functions that are not listed.` : `5. Use accessible selectors (role, label, text) or data-testid attributes for locators.`}
 6. Add meaningful assertions — not just "page loads".
 7. Use data-testid selectors when inferrable, otherwise use accessible selectors (role, label, text).
 8. Handle async operations with proper waitFor / expect patterns.
