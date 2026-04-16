@@ -46,19 +46,19 @@ test('example', async ({ page }) => {});`;
 
     it('does not inject inside class bodies when stray imports appear mid-file', () => {
       const codeWithInlineClass = `import { expect, test } from '../../fixtures/base';
-import { CustomDashboards } from '../../pages/dashboards/custom-dashboards.po';
+import { SettingsPage } from '../../pages/settings.page';
 
-let customDashboards: CustomDashboards;
+let settingsPage: SettingsPage;
 
-test.describe('Case Flow', () => {
-  test('chart is visible', async () => {});
+test.describe('Settings', () => {
+  test('form is visible', async () => {});
 });
 import { Locator } from '@playwright/test';
-import { Base } from '../../pages/base.po';
+import { BasePage } from '../../pages/base.page';
 
-export class CustomDashboards extends Base {
+export class SettingsPage extends BasePage {
   elements = {
-    getChart: (): Locator => this.page.getByTestId('chart'),
+    getSaveButton: (): Locator => this.page.getByTestId('save-btn'),
   };
 }`;
 

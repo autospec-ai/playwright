@@ -123,93 +123,92 @@ export class DashboardPage {
     });
 
     it('extracts arrow-function locators in elements object', async () => {
-      writeFile('e2e/pages/dashboards/custom-dashboards.po.ts', `
+      writeFile('e2e/pages/settings/settings.page.ts', `
 import { Locator, Page } from '@playwright/test';
 
-export class CustomDashboards {
+export class SettingsPage {
   constructor(private page: Page) {}
 
   elements = {
-    getWidgets: (): Locator => this.page.locator('[id*="custom-dashboard-widget"]'),
-    getEditButton: (): Locator => this.page.getByTestId('edit-dashboard-btn'),
-    getWidgetByName: (name: string): Locator => this.page.locator(\`[id*="widget"]:has-text("\${name}")\`),
-    v3Elements: {
-      getDashboardGrid: (): Locator => this.page.locator('scwx-custom-dashboard-widget-grid-v3'),
+    getCards: (): Locator => this.page.locator('[data-testid="settings-card"]'),
+    getSaveButton: (): Locator => this.page.getByTestId('save-btn'),
+    getCardByName: (name: string): Locator => this.page.locator(\`[data-testid="card"]:has-text("\${name}")\`),
+    advancedSection: {
+      getToggle: (): Locator => this.page.locator('[data-testid="advanced-toggle"]'),
     },
   };
 
   async goto(path?: string): Promise<void> {
-    await this.page.goto(path ?? '/dashboards/custom');
+    await this.page.goto(path ?? '/settings');
     await this.waitForSpinner();
   }
 }
 `);
 
-      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.po.ts')] });
+      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.page.ts')] });
       const scanner = new ProjectScanner(config);
       const ctx = await scanner.scan(makeDiff());
 
       expect(ctx.pageObjects).toHaveLength(1);
-      expect(ctx.pageObjects[0].className).toBe('CustomDashboards');
+      expect(ctx.pageObjects[0].className).toBe('SettingsPage');
 
       const locatorNames = ctx.pageObjects[0].locators.map(l => l.name);
-      expect(locatorNames).toContain('getWidgets');
-      expect(locatorNames).toContain('getEditButton');
-      expect(locatorNames).toContain('getWidgetByName');
-      expect(locatorNames).toContain('getDashboardGrid');
+      expect(locatorNames).toContain('getCards');
+      expect(locatorNames).toContain('getSaveButton');
+      expect(locatorNames).toContain('getCardByName');
 
       // Should extract routes from goto() method
-      expect(ctx.pageObjects[0].routes).toContain('/dashboards/custom');
+      expect(ctx.pageObjects[0].routes).toContain('/settings');
 
       // Should extract nested object locators with qualified names
-      expect(locatorNames).toContain('v3Elements.getDashboardGrid');
+      expect(locatorNames).toContain('advancedSection.getToggle');
     });
 
     it('extracts factory-function element groups with returned locators', async () => {
-      writeFile('e2e/pages/investigations/investigations.po.ts', `
+      writeFile('e2e/pages/orders/orders.page.ts', `
 import { Locator, Page } from '@playwright/test';
 
-export class InvestigationsPage {
+export class OrdersPage {
   constructor(private page: Page) {}
 
   elements = {
-    getSummaryElements: () => {
-      const getSelectStatus = (): Locator => this.page.getByTestId('status-btn');
-      const getSelectSignee = (): Locator => this.page.locator('[name="Assignee"]');
+    getFilterGroup: () => {
+      const getStatusFilter = (): Locator => this.page.getByTestId('status-filter');
+      const getDatePicker = (): Locator => this.page.locator('[name="date-range"]');
 
-      return { getSelectStatus, getSelectSignee };
+      return { getStatusFilter, getDatePicker };
     },
 
-    getFiltersButton: (): Locator => this.page.locator('button:has([class*="ag-icon-filter"])'),
-    getActionsButton: (): Locator => this.page.locator('button').filter({ hasText: 'Actions' }),
+    getSearchInput: (): Locator => this.page.locator('input[placeholder="Search orders"]'),
+    getExportButton: (): Locator => this.page.locator('button').filter({ hasText: 'Export' }),
     getSelectAllCheckbox: (): Locator => this.page.locator('input[aria-label*="toggle all rows"]'),
   };
 
   async goto(): Promise<void> {
-    await this.page.goto('/investigations');
+    await this.page.goto('/orders');
   }
 }
 `);
 
-      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.po.ts')] });
+      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.page.ts')] });
       const scanner = new ProjectScanner(config);
       const ctx = await scanner.scan(makeDiff());
 
       expect(ctx.pageObjects).toHaveLength(1);
-      expect(ctx.pageObjects[0].className).toBe('InvestigationsPage');
+      expect(ctx.pageObjects[0].className).toBe('OrdersPage');
 
       const locatorNames = ctx.pageObjects[0].locators.map(l => l.name);
       // Direct arrow-function locators
-      expect(locatorNames).toContain('getFiltersButton');
-      expect(locatorNames).toContain('getActionsButton');
+      expect(locatorNames).toContain('getSearchInput');
+      expect(locatorNames).toContain('getExportButton');
       expect(locatorNames).toContain('getSelectAllCheckbox');
 
       // Factory-function locators with qualified names
-      expect(locatorNames).toContain('getSummaryElements().getSelectStatus');
-      expect(locatorNames).toContain('getSummaryElements().getSelectSignee');
+      expect(locatorNames).toContain('getFilterGroup().getStatusFilter');
+      expect(locatorNames).toContain('getFilterGroup().getDatePicker');
 
       // Routes
-      expect(ctx.pageObjects[0].routes).toContain('/investigations');
+      expect(ctx.pageObjects[0].routes).toContain('/orders');
     });
 
     it('skips files without exported classes', async () => {
