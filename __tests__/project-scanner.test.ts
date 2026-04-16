@@ -160,6 +160,56 @@ export class CustomDashboards {
 
       // Should extract routes from goto() method
       expect(ctx.pageObjects[0].routes).toContain('/dashboards/custom');
+
+      // Should extract nested object locators with qualified names
+      expect(locatorNames).toContain('v3Elements.getDashboardGrid');
+    });
+
+    it('extracts factory-function element groups with returned locators', async () => {
+      writeFile('e2e/pages/investigations/investigations.po.ts', `
+import { Locator, Page } from '@playwright/test';
+
+export class InvestigationsPage {
+  constructor(private page: Page) {}
+
+  elements = {
+    getSummaryElements: () => {
+      const getSelectStatus = (): Locator => this.page.getByTestId('status-btn');
+      const getSelectSignee = (): Locator => this.page.locator('[name="Assignee"]');
+
+      return { getSelectStatus, getSelectSignee };
+    },
+
+    getFiltersButton: (): Locator => this.page.locator('button:has([class*="ag-icon-filter"])'),
+    getActionsButton: (): Locator => this.page.locator('button').filter({ hasText: 'Actions' }),
+    getSelectAllCheckbox: (): Locator => this.page.locator('input[aria-label*="toggle all rows"]'),
+  };
+
+  async goto(): Promise<void> {
+    await this.page.goto('/investigations');
+  }
+}
+`);
+
+      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.po.ts')] });
+      const scanner = new ProjectScanner(config);
+      const ctx = await scanner.scan(makeDiff());
+
+      expect(ctx.pageObjects).toHaveLength(1);
+      expect(ctx.pageObjects[0].className).toBe('InvestigationsPage');
+
+      const locatorNames = ctx.pageObjects[0].locators.map(l => l.name);
+      // Direct arrow-function locators
+      expect(locatorNames).toContain('getFiltersButton');
+      expect(locatorNames).toContain('getActionsButton');
+      expect(locatorNames).toContain('getSelectAllCheckbox');
+
+      // Factory-function locators with qualified names
+      expect(locatorNames).toContain('getSummaryElements().getSelectStatus');
+      expect(locatorNames).toContain('getSummaryElements().getSelectSignee');
+
+      // Routes
+      expect(ctx.pageObjects[0].routes).toContain('/investigations');
     });
 
     it('skips files without exported classes', async () => {

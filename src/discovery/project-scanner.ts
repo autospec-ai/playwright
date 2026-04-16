@@ -186,6 +186,51 @@ export class ProjectScanner {
       }
     }
 
+    // Pattern: factory-function element groups — groupName: () => { const x = ...; return { x, y } }
+    // Extracts the group name and the locator names from the return statement.
+    // Usage: instance.elements.groupName().locatorName()
+    const factoryRegex = /(\w+)\s*:\s*\([^)]*\)\s*=>\s*\{([\s\S]*?)return\s*\{([^}]+)\}/g;
+    while ((match = factoryRegex.exec(content)) !== null) {
+      const groupName = match[1];
+      // Skip if already found as a direct locator
+      if (locators.some(l => l.name === groupName)) continue;
+
+      const body = match[2];
+      const returnedNames = match[3].split(',').map(s => s.split(':')[0].trim()).filter(Boolean);
+
+      // Extract locators defined inside the factory body
+      for (const name of returnedNames) {
+        if (locators.some(l => l.name === name)) continue;
+
+        // Look for `const name = (): Locator => this.page.getBy/locator(...)`
+        const innerRegex = new RegExp(
+          `const\\s+${name}\\s*[=:]\\s*\\([^)]*\\)\\s*(?::\\s*\\w+)?\\s*=>\\s*((?:this\\.page|page)\\.(getBy\\w+|locator)\\s*\\([^)]+\\))`,
+        );
+        const innerMatch = body.match(innerRegex);
+        if (innerMatch) {
+          locators.push({ name: `${groupName}().${name}`, selector: innerMatch[1], source: filepath });
+        }
+      }
+    }
+
+    // Pattern: nested object with locators — groupName: { getName: (): Locator => ... }
+    // Matches nested objects that contain direct arrow-function locators.
+    const nestedObjRegex = /(\w+)\s*:\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g;
+    while ((match = nestedObjRegex.exec(content)) !== null) {
+      const groupName = match[1];
+      const body = match[2];
+
+      // Find arrow-function locators inside the nested object
+      const innerArrow = /(\w+)\s*:\s*\([^)]*\)\s*(?::\s*\w+)?\s*=>\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
+      let innerMatch;
+      while ((innerMatch = innerArrow.exec(body)) !== null) {
+        const qualifiedName = `${groupName}.${innerMatch[1]}`;
+        if (!locators.some(l => l.name === qualifiedName)) {
+          locators.push({ name: qualifiedName, selector: innerMatch[2], source: filepath });
+        }
+      }
+    }
+
     return locators;
   }
 

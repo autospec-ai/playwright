@@ -332,10 +332,11 @@ ${parts.join('\n')}`);
     const testOutputPath = path.join(this.config.testDirectory, testFilename);
     const testDir = path.dirname(testOutputPath);
 
-    // Page objects with import paths
+    // Page objects with exact import statements
     if (this.projectContext.pageObjects.length > 0) {
       const items = this.projectContext.pageObjects.map(po => {
         const relativePath = this.computeImportPath(testDir, po.filepath);
+        const importStatement = `import { ${po.className} } from '${relativePath}';`;
         const methodList = po.exportedMethods.length > 0
           ? `Methods: ${po.exportedMethods.join(', ')}`
           : '';
@@ -346,11 +347,13 @@ ${parts.join('\n')}`);
           ? `Navigation routes: ${po.routes.join(', ')}`
           : '';
         const details = [methodList, locatorList, routeList].filter(Boolean).join('\n');
-        return `### ${po.className} (from '${relativePath}')
+        return `### ${po.className}
+\`${importStatement}\`
 ${details}`;
       }).join('\n\n');
 
       sections.push(`## Page Objects Available for Import
+Use EXACTLY these import statements — the class names must match exactly as shown.
 ${items}`);
     }
 
@@ -368,9 +371,10 @@ ${items}`);
 
     if (sections.length > 0) {
       sections.push(`## IMPORTANT
-- Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects.
+- Copy the import statements EXACTLY as shown above — class names and paths must match character-for-character.
+- Only use methods and locators listed above. Do NOT create inline locators for elements that already have locators in page objects.
 - Do NOT invent page objects, locators, or utility functions that are not listed above.
-- Import paths above are relative from the test file location.`);
+- Do NOT rename, abbreviate, or alias class names (e.g., use InvestigationsPage, not Investigations).`);
     }
 
     return sections.length > 0 ? '\n' + sections.join('\n\n') + '\n' : '';
