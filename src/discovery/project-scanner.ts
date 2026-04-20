@@ -5,7 +5,6 @@ import { glob } from 'glob';
 import {
   ActionConfig,
   DiffResult,
-  LocatorInfo,
   PageObjectInfo,
   ProjectContext,
   TestCoverageInfo,
@@ -19,6 +18,7 @@ const DEFAULT_POM_PATTERNS = [
   '**/page-objects/**/*.ts',
   '**/page-object/**/*.ts',
   '**/*.pom.ts',
+  '**/*.po.ts',
   '**/pom/**/*.ts',
 ];
 
@@ -33,7 +33,7 @@ const DEFAULT_UTILITY_PATTERNS = [
 
 const GLOBAL_IGNORE = ['**/node_modules/**', '**/dist/**', '**/.git/**', '**/*.d.ts', '**/*.min.*'];
 
-const MAX_FILE_SIZE = 30_000; // 30KB per file, matching existing convention
+const MAX_FILE_SIZE = 50_000; // 50KB per file
 
 export class ProjectScanner {
   private config: ActionConfig;
@@ -54,9 +54,7 @@ export class ProjectScanner {
     core.info(`Discovered: ${pageObjects.length} page objects, ${utilities.length} utility files, ${coverage.length} tested files`);
 
     // Score by relevance to the current diff and trim to budget
-    const scored = this.applyRelevanceAndBudget(pageObjects, utilities, coverage, diff);
-
-    return scored;
+    return this.applyRelevanceAndBudget(pageObjects, utilities, coverage, diff);
   }
 
   // ─── Page Object Discovery ───
@@ -73,165 +71,15 @@ export class ProjectScanner {
       const content = this.readFileSafe(filepath);
       if (!content) continue;
 
-      const info = this.extractPageObject(filepath, content);
-      if (info) results.push(info);
+      // Must export a class to be considered a page object
+      const classMatch = content.match(/export\s+(?:default\s+)?class\s+(\w+)/);
+      if (!classMatch) continue;
+
+      const rel = path.relative(process.cwd(), filepath);
+      results.push({ filepath: rel, className: classMatch[1], source: content });
     }
 
     return results;
-  }
-
-  private extractPageObject(filepath: string, content: string): PageObjectInfo | null {
-    // Extract class name
-    const classMatch = content.match(/export\s+(?:default\s+)?class\s+(\w+)/);
-    if (!classMatch) return null;
-
-    const className = classMatch[1];
-    const rel = path.relative(process.cwd(), filepath);
-
-    // Extract method signatures (public methods in the class)
-    const methods: string[] = [];
-    const seen = new Set<string>();
-
-    // Standard methods: async methodName(params) { ... }
-    const methodRegex = /(?:async\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*[^{]+?)?\s*\{/g;
-    let match;
-    while ((match = methodRegex.exec(content)) !== null) {
-      const name = match[1];
-      const params = match[2].trim();
-      // Skip constructor and private-looking methods
-      if (name === 'constructor' || name.startsWith('_')) continue;
-      if (seen.has(name)) continue;
-      seen.add(name);
-      methods.push(params ? `${name}(${params})` : `${name}()`);
-    }
-
-    // Static properties/methods: static propName = value or static methodName()
-    const staticRegex = /static\s+(?:readonly\s+)?(\w+)\s*[=:]/g;
-    while ((match = staticRegex.exec(content)) !== null) {
-      const name = match[1];
-      if (!seen.has(name)) {
-        seen.add(name);
-        methods.push(`static ${name}`);
-      }
-    }
-
-    // Extract locator definitions
-    const locators = this.extractLocators(rel, content);
-
-    // Extract navigation routes from goto/navigate methods
-    const routes = this.extractRoutes(content);
-
-    return { filepath: rel, className, exportedMethods: methods, locators, routes };
-  }
-
-  private extractRoutes(content: string): string[] {
-    const routes: string[] = [];
-    const seen = new Set<string>();
-
-    // Pattern: this.page.goto('...') or page.goto('...')
-    const gotoRegex = /(?:this\.page|page)\.goto\s*\(\s*['"`]([^'"`$]+)['"`]/g;
-    let match;
-    while ((match = gotoRegex.exec(content)) !== null) {
-      const route = match[1];
-      if (!seen.has(route)) {
-        seen.add(route);
-        routes.push(route);
-      }
-    }
-
-    // Pattern: this.page.goto(path ?? '/default') — extract the default
-    const defaultGotoRegex = /(?:this\.page|page)\.goto\s*\(\s*\w+\s*\?\?\s*['"`]([^'"`]+)['"`]/g;
-    while ((match = defaultGotoRegex.exec(content)) !== null) {
-      const route = match[1];
-      if (!seen.has(route)) {
-        seen.add(route);
-        routes.push(route);
-      }
-    }
-
-    return routes;
-  }
-
-  private extractLocators(filepath: string, content: string): LocatorInfo[] {
-    const locators: LocatorInfo[] = [];
-
-    // Pattern: this.someLocator = page.getByRole/getByText/getByTestId/locator(...)
-    const assignmentRegex = /(?:this\.)?(\w+)\s*=\s*((?:page|this\.page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-    let match;
-    while ((match = assignmentRegex.exec(content)) !== null) {
-      locators.push({ name: match[1], selector: match[2], source: filepath });
-    }
-
-    // Pattern: get someLocator() { return this.page.getByRole(...) }
-    const getterRegex = /get\s+(\w+)\s*\(\)\s*\{[^}]*return\s+((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-    while ((match = getterRegex.exec(content)) !== null) {
-      locators.push({ name: match[1], selector: match[2], source: filepath });
-    }
-
-    // Pattern: readonly someLocator = this.page.getByRole(...)
-    const readonlyRegex = /(?:readonly\s+)(\w+)\s*=\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-    while ((match = readonlyRegex.exec(content)) !== null) {
-      locators.push({ name: match[1], selector: match[2], source: filepath });
-    }
-
-    // Pattern: arrow function in object literal — getName: (): Locator => this.page.getByTestId(...)
-    // Also matches with parameters: getByName: (name: string): Locator => this.page.locator(...)
-    // This is a common POM pattern where elements are organized as object properties.
-    const arrowRegex = /(\w+)\s*:\s*\([^)]*\)\s*(?::\s*\w+)?\s*=>\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-    while ((match = arrowRegex.exec(content)) !== null) {
-      const name = match[1];
-      // Skip duplicates — earlier patterns may have caught some of these
-      if (!locators.some(l => l.name === name)) {
-        locators.push({ name, selector: match[2], source: filepath });
-      }
-    }
-
-    // Pattern: factory-function element groups — groupName: () => { const x = ...; return { x, y } }
-    // Extracts the group name and the locator names from the return statement.
-    // Usage: instance.elements.groupName().locatorName()
-    const factoryRegex = /(\w+)\s*:\s*\([^)]*\)\s*=>\s*\{([\s\S]*?)return\s*\{([^}]+)\}/g;
-    while ((match = factoryRegex.exec(content)) !== null) {
-      const groupName = match[1];
-      // Skip if already found as a direct locator
-      if (locators.some(l => l.name === groupName)) continue;
-
-      const body = match[2];
-      const returnedNames = match[3].split(',').map(s => s.split(':')[0].trim()).filter(Boolean);
-
-      // Extract locators defined inside the factory body
-      for (const name of returnedNames) {
-        if (locators.some(l => l.name === name)) continue;
-
-        // Look for `const name = (): Locator => this.page.getBy/locator(...)`
-        const innerRegex = new RegExp(
-          `const\\s+${name}\\s*[=:]\\s*\\([^)]*\\)\\s*(?::\\s*\\w+)?\\s*=>\\s*((?:this\\.page|page)\\.(getBy\\w+|locator)\\s*\\([^)]+\\))`,
-        );
-        const innerMatch = body.match(innerRegex);
-        if (innerMatch) {
-          locators.push({ name: `${groupName}().${name}`, selector: innerMatch[1], source: filepath });
-        }
-      }
-    }
-
-    // Pattern: nested object with locators — groupName: { getName: (): Locator => ... }
-    // Matches nested objects that contain direct arrow-function locators.
-    const nestedObjRegex = /(\w+)\s*:\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g;
-    while ((match = nestedObjRegex.exec(content)) !== null) {
-      const groupName = match[1];
-      const body = match[2];
-
-      // Find arrow-function locators inside the nested object
-      const innerArrow = /(\w+)\s*:\s*\([^)]*\)\s*(?::\s*\w+)?\s*=>\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-      let innerMatch;
-      while ((innerMatch = innerArrow.exec(body)) !== null) {
-        const qualifiedName = `${groupName}.${innerMatch[1]}`;
-        if (!locators.some(l => l.name === qualifiedName)) {
-          locators.push({ name: qualifiedName, selector: innerMatch[2], source: filepath });
-        }
-      }
-    }
-
-    return locators;
   }
 
   // ─── Utility Discovery ───
@@ -248,44 +96,14 @@ export class ProjectScanner {
       const content = this.readFileSafe(filepath);
       if (!content) continue;
 
-      const info = this.extractUtility(filepath, content);
-      if (info) results.push(info);
+      // Must have at least one export
+      if (!/export\s/.test(content)) continue;
+
+      const rel = path.relative(process.cwd(), filepath);
+      results.push({ filepath: rel, source: content });
     }
 
     return results;
-  }
-
-  private extractUtility(filepath: string, content: string): UtilityInfo | null {
-    const rel = path.relative(process.cwd(), filepath);
-    const functions: string[] = [];
-    const constants: string[] = [];
-
-    // Exported functions
-    const fnRegex = /export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/g;
-    let match;
-    while ((match = fnRegex.exec(content)) !== null) {
-      const name = match[1];
-      const params = match[2].trim();
-      functions.push(params ? `${name}(${params})` : `${name}()`);
-    }
-
-    // Exported arrow functions: export const foo = async (params) => ...
-    const arrowRegex = /export\s+const\s+(\w+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::\s*[^=]+?)?\s*=>/g;
-    while ((match = arrowRegex.exec(content)) !== null) {
-      const name = match[1];
-      const params = match[2].trim();
-      functions.push(params ? `${name}(${params})` : `${name}()`);
-    }
-
-    // Exported constants (non-function)
-    const constRegex = /export\s+const\s+(\w+)\s*(?::\s*[^=]+?)?\s*=\s*(?!(?:async\s*)?\()/g;
-    while ((match = constRegex.exec(content)) !== null) {
-      constants.push(match[1]);
-    }
-
-    if (functions.length === 0 && constants.length === 0) return null;
-
-    return { filepath: rel, exportedFunctions: functions, exportedConstants: constants };
   }
 
   // ─── Test Coverage Analysis ───
@@ -320,18 +138,18 @@ export class ProjectScanner {
     const describedFlows: string[] = [];
     const testNames: string[] = [];
 
+    let match;
+
     // Routes: page.goto('...') or page.navigate('...')
     const routeRegex = /(?:page\.goto|page\.navigate)\s*\(\s*['"`]([^'"`]+)/g;
-    let match;
     while ((match = routeRegex.exec(content)) !== null) {
       routes.push(match[1]);
     }
 
-    // Imported page objects: import { LoginPage } from '...'
+    // Imported page objects
     const importRegex = /import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
     while ((match = importRegex.exec(content)) !== null) {
       const importPath = match[2];
-      // Heuristic: if the import path contains 'page', 'pom', or 'object', it's likely a POM import
       if (/page|pom|object/i.test(importPath)) {
         const names = match[1].split(',').map(s => s.trim()).filter(Boolean);
         importedPageObjects.push(...names);
@@ -344,7 +162,7 @@ export class ProjectScanner {
       describedFlows.push(match[1]);
     }
 
-    // test() names
+    // test() names — captures what's actually being tested
     const testRegex = /\btest\s*\(\s*['"`]([^'"`]+)/g;
     while ((match = testRegex.exec(content)) !== null) {
       testNames.push(match[1]);
@@ -368,27 +186,24 @@ export class ProjectScanner {
     const utilBudget = Math.floor(budget * 0.2);
     const coverageBudget = Math.floor(budget * 0.3);
 
-    // Score and sort page objects
+    // Score and sort page objects by relevance to the diff
     const scoredPom = pageObjects
       .map(po => ({ item: po, score: this.scoreRelevance(po.filepath, po.className, diff) }))
       .sort((a, b) => b.score - a.score);
 
-    // Score and sort utilities
     const scoredUtil = utilities
       .map(u => ({ item: u, score: this.scoreRelevance(u.filepath, null, diff) }))
       .sort((a, b) => b.score - a.score);
 
-    // Trim to budget
-    const trimmedPom = this.trimToTokenBudget(
+    // Trim source to fit budget (truncate individual files if needed)
+    const trimmedPom = this.trimSourcesToBudget(
       scoredPom.map(s => s.item),
       pomBudget,
-      (po) => this.estimatePageObjectTokens(po)
     );
 
-    const trimmedUtil = this.trimToTokenBudget(
+    const trimmedUtil = this.trimSourcesToBudget(
       scoredUtil.map(s => s.item),
       utilBudget,
-      (u) => this.estimateUtilityTokens(u)
     );
 
     const trimmedCoverage = this.trimToTokenBudget(
@@ -397,31 +212,20 @@ export class ProjectScanner {
       (c) => this.estimateCoverageTokens(c)
     );
 
-    return {
-      pageObjects: trimmedPom,
-      utilities: trimmedUtil,
-      coverage: trimmedCoverage,
-    };
+    return { pageObjects: trimmedPom, utilities: trimmedUtil, coverage: trimmedCoverage };
   }
 
   private scoreRelevance(filepath: string, className: string | null, diff: DiffResult): number {
-    let score = 1; // base score
-
-    const changedFiles = diff.files;
+    let score = 1;
     const fileDir = path.dirname(filepath);
 
-    for (const changed of changedFiles) {
-      // Check if any changed file imports this file
+    for (const changed of diff.files) {
       if (changed.fullContent && this.contentReferencesFile(changed.fullContent, filepath)) {
         score += 10;
       }
-
-      // Same directory
       if (path.dirname(changed.filename) === fileDir) {
         score += 5;
       }
-
-      // Class/function name appears in changed file content
       if (className && changed.fullContent && changed.fullContent.includes(className)) {
         score += 3;
       }
@@ -431,10 +235,37 @@ export class ProjectScanner {
   }
 
   private contentReferencesFile(content: string, filepath: string): boolean {
-    // Check if the content imports from this filepath (with or without extension)
     const withoutExt = filepath.replace(/\.\w+$/, '');
     const basename = path.basename(withoutExt);
     return content.includes(basename);
+  }
+
+  /**
+   * Trim source-carrying items to a token budget.
+   * High-relevance items get more space; low-relevance items may be truncated or dropped.
+   */
+  private trimSourcesToBudget<T extends { source: string }>(items: T[], budgetTokens: number): T[] {
+    const result: T[] = [];
+    let usedTokens = 0;
+    // Per-file cap: no single file takes more than 40% of the category budget
+    const perFileCap = Math.floor(budgetTokens * 0.4);
+
+    for (const item of items) {
+      let tokens = Math.ceil(item.source.length / 4);
+
+      if (tokens > perFileCap) {
+        // Truncate the source to fit the per-file cap
+        const maxChars = perFileCap * 4;
+        item.source = item.source.slice(0, maxChars) + '\n// ... (truncated)';
+        tokens = perFileCap;
+      }
+
+      if (usedTokens + tokens > budgetTokens) break;
+      result.push(item);
+      usedTokens += tokens;
+    }
+
+    return result;
   }
 
   private trimToTokenBudget<T>(items: T[], budgetTokens: number, estimator: (item: T) => number): T[] {
@@ -449,21 +280,6 @@ export class ProjectScanner {
     }
 
     return result;
-  }
-
-  private estimatePageObjectTokens(po: PageObjectInfo): number {
-    let chars = po.filepath.length + po.className.length;
-    chars += po.exportedMethods.join(', ').length;
-    chars += po.locators.map(l => `${l.name}: ${l.selector}`).join(', ').length;
-    chars += po.routes.join(', ').length;
-    return Math.ceil(chars / 4);
-  }
-
-  private estimateUtilityTokens(u: UtilityInfo): number {
-    let chars = u.filepath.length;
-    chars += u.exportedFunctions.join(', ').length;
-    chars += u.exportedConstants.join(', ').length;
-    return Math.ceil(chars / 4);
   }
 
   private estimateCoverageTokens(c: TestCoverageInfo): number {

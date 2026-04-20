@@ -40,11 +40,18 @@ function validateTestPath(filepath: string, testDirectory: string): void {
   }
 }
 
+interface GeneratedPomFile {
+  filename: string;
+  filepath: string;
+  content: string;
+}
+
 export class TestGenerator {
   private config: ActionConfig;
   private llm: LLMClient;
   private prompts: PromptBuilder;
   private extractedFixtures: ExtractedFixture[] = [];
+  private generatedPomFiles: GeneratedPomFile[] = [];
 
   constructor(config: ActionConfig, llm: LLMClient) {
     this.config = config;
@@ -149,6 +156,58 @@ export class TestGenerator {
     return this.extractedFixtures;
   }
 
+  getGeneratedPomFiles(): GeneratedPomFile[] {
+    return this.generatedPomFiles;
+  }
+
+  async writePomFiles(): Promise<string[]> {
+    if (this.generatedPomFiles.length === 0) return [];
+    const written: string[] = [];
+
+    for (const pom of this.generatedPomFiles) {
+      const fullPath = path.resolve(pom.filepath);
+      const dir = path.dirname(fullPath);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(fullPath, pom.content, 'utf-8');
+      written.push(pom.filepath);
+      core.info(`Wrote POM: ${pom.filepath}`);
+    }
+
+    return written;
+  }
+
+  /**
+   * Extract `// POM_FILE: <filename>` blocks from LLM output.
+   * Returns the test code with POM blocks removed.
+   */
+  private extractPomFiles(code: string): string {
+    const pomDir = this.config.pomOutputDirectory;
+    if (!pomDir) return code;
+
+    const pomMarker = /^\/\/\s*POM_FILE:\s*(.+)$/gm;
+    const parts = code.split(pomMarker);
+
+    // If no POM_FILE markers found, return code as-is
+    if (parts.length <= 1) return code;
+
+    // parts[0] is the test code before any POM_FILE marker
+    // parts[1] is the filename, parts[2] is the POM content, etc.
+    const testCode = parts[0];
+
+    for (let i = 1; i < parts.length; i += 2) {
+      const filename = parts[i].trim();
+      const pomContent = (parts[i + 1] || '').trim();
+
+      if (filename && pomContent) {
+        const filepath = path.join(pomDir, filename);
+        this.generatedPomFiles.push({ filename, filepath, content: pomContent });
+        core.info(`Extracted POM file: ${filepath}`);
+      }
+    }
+
+    return testCode.trim();
+  }
+
   // ─── Phase 1: Planning ───
 
   private async generatePlan(
@@ -166,7 +225,7 @@ export class TestGenerator {
         },
         { role: 'user', content: prompt },
       ],
-      { maxTokens: 4096, temperature: 0.1 }
+      { maxTokens: 4096, temperature: 0 }
     );
 
     // Parse the JSON response
@@ -209,7 +268,7 @@ export class TestGenerator {
         },
         { role: 'user', content: prompt },
       ],
-      { maxTokens: 8192, temperature: 0.2 }
+      { maxTokens: 8192, temperature: 0 }
     );
 
     // Clean potential markdown fences from response
@@ -217,6 +276,11 @@ export class TestGenerator {
       .replace(/^```(?:typescript|ts)?\s*\n?/gm, '')
       .replace(/\n?```\s*$/gm, '')
       .trim();
+
+    // ─── Extract POM files if pomOutputDirectory is configured ───
+    if (this.config.pomOutputDirectory) {
+      code = this.extractPomFiles(code);
+    }
 
     // Ensure the file starts with an import
     if (!code.startsWith('import')) {

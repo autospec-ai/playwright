@@ -268,58 +268,47 @@ Generate a SEPARATE test case that runs an axe-core accessibility scan:
 
     const sections: string[] = [];
 
-    // Page objects catalog
+    // Page objects — show actual source code so the LLM sees exactly what exists
     if (this.projectContext.pageObjects.length > 0) {
-      const items = this.projectContext.pageObjects.map(po => {
-        const methods = po.exportedMethods.length > 0
-          ? `: ${po.exportedMethods.join(', ')}`
-          : '';
-        const locatorNames = po.locators.map(l => l.name);
-        const locators = locatorNames.length > 0
-          ? ` | Locators: ${locatorNames.join(', ')}`
-          : '';
-        const routes = po.routes.length > 0
-          ? ` | Routes: ${po.routes.join(', ')}`
-          : '';
-        return `- ${po.className} (${po.filepath})${methods}${locators}${routes}`;
-      }).join('\n');
+      const items = this.projectContext.pageObjects.map(po =>
+        `### ${po.className} (${po.filepath})\n\`\`\`typescript\n${po.source}\n\`\`\``
+      ).join('\n\n');
 
-      sections.push(`## Available Page Objects
-The project already has these page object classes. REUSE them — do not invent new ones.
+      sections.push(`## Available Page Objects — REAL SOURCE CODE
+The project already has these page object classes. Read the source carefully — use ONLY the classes, methods, elements, and locators that actually exist in this code.
 ${items}`);
     }
 
-    // Utilities catalog
+    // Utilities — show actual source
     if (this.projectContext.utilities.length > 0) {
-      const items = this.projectContext.utilities.map(u => {
-        const fns = u.exportedFunctions.length > 0
-          ? u.exportedFunctions.join(', ')
-          : '';
-        return `- ${u.filepath}: ${fns}`;
-      }).join('\n');
+      const items = this.projectContext.utilities.map(u =>
+        `### ${u.filepath}\n\`\`\`typescript\n${u.source}\n\`\`\``
+      ).join('\n\n');
 
-      sections.push(`## Available Utilities
-These helper functions exist in the project. Use them instead of writing inline equivalents.
+      sections.push(`## Available Utilities — REAL SOURCE CODE
+These utility files exist in the project. Use the functions and constants you see in the source.
 ${items}`);
     }
 
-    // Coverage summary
+    // Coverage — show individual test names so LLM can see what's already tested
     if (this.projectContext.coverage.length > 0) {
-      const allRoutes = [...new Set(this.projectContext.coverage.flatMap(c => c.routes))];
-      const allFlows = [...new Set(this.projectContext.coverage.flatMap(c => c.describedFlows))];
+      const items = this.projectContext.coverage.map(c => {
+        const parts: string[] = [`- ${c.filepath}`];
+        if (c.describedFlows.length > 0) {
+          parts.push(`  Flows: ${c.describedFlows.join(', ')}`);
+        }
+        if (c.testNames.length > 0) {
+          parts.push(`  Tests: ${c.testNames.join(' | ')}`);
+        }
+        if (c.routes.length > 0) {
+          parts.push(`  Routes: ${c.routes.join(', ')}`);
+        }
+        return parts.join('\n');
+      }).join('\n');
 
-      const parts: string[] = [];
-      if (allRoutes.length > 0) {
-        parts.push(`Already tested routes: ${allRoutes.join(', ')}`);
-      }
-      if (allFlows.length > 0) {
-        parts.push(`Already tested flows: ${allFlows.join(', ')}`);
-      }
-
-      if (parts.length > 0) {
-        sections.push(`## Existing Test Coverage
-${parts.join('\n')}`);
-      }
+      sections.push(`## Existing Test Coverage
+These tests already exist. Do NOT duplicate them — only generate tests for NEW or CHANGED behavior.
+${items}`);
     }
 
     return sections.length > 0 ? '\n' + sections.join('\n\n') + '\n' : '';
@@ -332,49 +321,49 @@ ${parts.join('\n')}`);
     const testOutputPath = path.join(this.config.testDirectory, testFilename);
     const testDir = path.dirname(testOutputPath);
 
-    // Page objects with exact import statements
+    // Page objects — exact import statement + full source
     if (this.projectContext.pageObjects.length > 0) {
       const items = this.projectContext.pageObjects.map(po => {
         const relativePath = this.computeImportPath(testDir, po.filepath);
-        const importStatement = `import { ${po.className} } from '${relativePath}';`;
-        const methodList = po.exportedMethods.length > 0
-          ? `Methods: ${po.exportedMethods.join(', ')}`
-          : '';
-        const locatorList = po.locators.length > 0
-          ? `Locators: ${po.locators.map(l => `${l.name} = ${l.selector}`).join(', ')}`
-          : '';
-        const routeList = po.routes.length > 0
-          ? `Navigation routes: ${po.routes.join(', ')}`
-          : '';
-        const details = [methodList, locatorList, routeList].filter(Boolean).join('\n');
         return `### ${po.className}
-\`${importStatement}\`
-${details}`;
+\`import { ${po.className} } from '${relativePath}';\`
+\`\`\`typescript
+${po.source}
+\`\`\``;
       }).join('\n\n');
 
-      sections.push(`## Page Objects Available for Import
-Use EXACTLY these import statements — the class names must match exactly as shown.
+      sections.push(`## Page Objects — REAL SOURCE CODE
+Use EXACTLY the import statements shown. Only use methods, elements, and locators that exist in the source below.
 ${items}`);
     }
 
-    // Utilities with import paths
+    // Utilities — exact import path + full source
     if (this.projectContext.utilities.length > 0) {
       const items = this.projectContext.utilities.map(u => {
         const relativePath = this.computeImportPath(testDir, u.filepath);
-        const fns = u.exportedFunctions.join(', ');
-        return `- import { ${fns} } from '${relativePath}'`;
-      }).join('\n');
+        return `### ${u.filepath}
+Import from: \`'${relativePath}'\`
+\`\`\`typescript
+${u.source}
+\`\`\``;
+      }).join('\n\n');
 
-      sections.push(`## Utility Functions Available
+      sections.push(`## Utility Functions — REAL SOURCE CODE
 ${items}`);
     }
 
     if (sections.length > 0) {
-      sections.push(`## IMPORTANT
-- Copy the import statements EXACTLY as shown above — class names and paths must match character-for-character.
-- Only use methods and locators listed above. Do NOT create inline locators for elements that already have locators in page objects.
-- Do NOT invent page objects, locators, or utility functions that are not listed above.
-- Do NOT rename, abbreviate, or alias class names (e.g., use InvestigationsPage, not Investigations).`);
+      const pomRule = this.config.pomOutputDirectory
+        ? `- If you need a NEW page object class that doesn't exist above, create it as a SEPARATE file. The file must be placed under "${this.config.pomOutputDirectory}/" and returned as an additional code block with a "// POM_FILE: <filename>" header on the first line.`
+        : `- Do NOT create page object classes inline in test files — use the existing ones above.`;
+
+      sections.push(`## CRITICAL RULES
+- Copy import statements EXACTLY as shown — class names and paths must match character-for-character.
+- ONLY use methods, elements, locators, and properties that exist in the source code above.
+- Do NOT invent, guess, or hallucinate any methods, elements, or locators.
+- Do NOT rename or abbreviate class names.
+${pomRule}
+- If the existing page objects don't have what you need, use raw \`page.locator()\` or \`page.getByTestId()\` calls instead of inventing POM methods.`);
     }
 
     return sections.length > 0 ? '\n' + sections.join('\n\n') + '\n' : '';

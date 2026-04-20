@@ -85,6 +85,15 @@ async function run(): Promise<void> {
     const writtenFiles = await generator.writeTests(tests);
     core.endGroup();
 
+    // Write POM files (when pomOutputDirectory is configured)
+    let pomFiles: string[] = [];
+    if (config.pomOutputDirectory && generator.getGeneratedPomFiles().length > 0) {
+      core.startGroup('📄 Writing page object files');
+      pomFiles = await generator.writePomFiles();
+      core.info(`Wrote ${pomFiles.length} page object file(s)`);
+      core.endGroup();
+    }
+
     // Write fixture files (API mock extraction)
     let fixtureFiles: string[] = [];
     if (config.generateApiMocks) {
@@ -210,6 +219,7 @@ function parseConfig(): ActionConfig {
     // Feature: Project Structure Discovery
     pomPatterns: parseCSV(core.getInput('pom_patterns')),
     utilityPatterns: parseCSV(core.getInput('utility_patterns')),
+    pomOutputDirectory: core.getInput('pom_output_directory') || '',
     projectContextBudget: parseInt(core.getInput('project_context_budget') || '8000', 10),
 
     // Feature: Trace Viewer Integration

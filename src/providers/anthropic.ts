@@ -26,7 +26,7 @@ export class AnthropicProvider implements LLMClient {
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: options?.maxTokens ?? 8192,
-      temperature: options?.temperature ?? 0.2,
+      temperature: options?.temperature ?? 0,
       ...(systemMsg ? { system: systemMsg.content } : {}),
       messages: chatMessages,
     });

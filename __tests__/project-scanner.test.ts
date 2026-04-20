@@ -22,6 +22,7 @@ function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig {
     customInstructions: '',
     pomPatterns: [],
     utilityPatterns: [],
+    pomOutputDirectory: '',
     projectContextBudget: 8000,
     traceOnFailure: false,
     traceMode: 'retain-on-failure',
@@ -66,8 +67,8 @@ describe('ProjectScanner', () => {
   }
 
   describe('page object discovery', () => {
-    it('discovers page objects matching *.page.ts pattern', async () => {
-      writeFile('e2e/pages/login.page.ts', `
+    it('discovers page objects with className, filepath, and source', async () => {
+      const sourceContent = `
 export class LoginPage {
   private page: Page;
 
@@ -88,7 +89,8 @@ export class LoginPage {
     return this.page.getByRole('alert').textContent();
   }
 }
-`);
+`;
+      writeFile('e2e/pages/login.page.ts', sourceContent);
 
       const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.page.ts')] });
       const scanner = new ProjectScanner(config);
@@ -96,119 +98,12 @@ export class LoginPage {
 
       expect(ctx.pageObjects).toHaveLength(1);
       expect(ctx.pageObjects[0].className).toBe('LoginPage');
-      expect(ctx.pageObjects[0].exportedMethods).toContain('login(username: string, password: string)');
-      expect(ctx.pageObjects[0].exportedMethods).toContain('getErrorMessage()');
-      expect(ctx.pageObjects[0].locators.length).toBeGreaterThanOrEqual(3);
-      expect(ctx.pageObjects[0].locators.map(l => l.name)).toContain('usernameInput');
-      expect(ctx.pageObjects[0].locators.map(l => l.name)).toContain('submitButton');
-    });
-
-    it('extracts getter-style locators', async () => {
-      writeFile('e2e/pages/dashboard.page.ts', `
-export class DashboardPage {
-  constructor(private page: Page) {}
-
-  get widgetContainer() { return this.page.getByTestId('widget-container') }
-  get addButton() { return this.page.getByRole('button', { name: 'Add' }) }
-}
-`);
-
-      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.page.ts')] });
-      const scanner = new ProjectScanner(config);
-      const ctx = await scanner.scan(makeDiff());
-
-      expect(ctx.pageObjects).toHaveLength(1);
-      expect(ctx.pageObjects[0].locators.map(l => l.name)).toContain('widgetContainer');
-      expect(ctx.pageObjects[0].locators.map(l => l.name)).toContain('addButton');
-    });
-
-    it('extracts arrow-function locators in elements object', async () => {
-      writeFile('e2e/pages/settings/settings.page.ts', `
-import { Locator, Page } from '@playwright/test';
-
-export class SettingsPage {
-  constructor(private page: Page) {}
-
-  elements = {
-    getCards: (): Locator => this.page.locator('[data-testid="settings-card"]'),
-    getSaveButton: (): Locator => this.page.getByTestId('save-btn'),
-    getCardByName: (name: string): Locator => this.page.locator(\`[data-testid="card"]:has-text("\${name}")\`),
-    advancedSection: {
-      getToggle: (): Locator => this.page.locator('[data-testid="advanced-toggle"]'),
-    },
-  };
-
-  async goto(path?: string): Promise<void> {
-    await this.page.goto(path ?? '/settings');
-    await this.waitForSpinner();
-  }
-}
-`);
-
-      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.page.ts')] });
-      const scanner = new ProjectScanner(config);
-      const ctx = await scanner.scan(makeDiff());
-
-      expect(ctx.pageObjects).toHaveLength(1);
-      expect(ctx.pageObjects[0].className).toBe('SettingsPage');
-
-      const locatorNames = ctx.pageObjects[0].locators.map(l => l.name);
-      expect(locatorNames).toContain('getCards');
-      expect(locatorNames).toContain('getSaveButton');
-      expect(locatorNames).toContain('getCardByName');
-
-      // Should extract routes from goto() method
-      expect(ctx.pageObjects[0].routes).toContain('/settings');
-
-      // Should extract nested object locators with qualified names
-      expect(locatorNames).toContain('advancedSection.getToggle');
-    });
-
-    it('extracts factory-function element groups with returned locators', async () => {
-      writeFile('e2e/pages/orders/orders.page.ts', `
-import { Locator, Page } from '@playwright/test';
-
-export class OrdersPage {
-  constructor(private page: Page) {}
-
-  elements = {
-    getFilterGroup: () => {
-      const getStatusFilter = (): Locator => this.page.getByTestId('status-filter');
-      const getDatePicker = (): Locator => this.page.locator('[name="date-range"]');
-
-      return { getStatusFilter, getDatePicker };
-    },
-
-    getSearchInput: (): Locator => this.page.locator('input[placeholder="Search orders"]'),
-    getExportButton: (): Locator => this.page.locator('button').filter({ hasText: 'Export' }),
-    getSelectAllCheckbox: (): Locator => this.page.locator('input[aria-label*="toggle all rows"]'),
-  };
-
-  async goto(): Promise<void> {
-    await this.page.goto('/orders');
-  }
-}
-`);
-
-      const config = makeConfig({ pomPatterns: [path.join(tmpDir, '**/*.page.ts')] });
-      const scanner = new ProjectScanner(config);
-      const ctx = await scanner.scan(makeDiff());
-
-      expect(ctx.pageObjects).toHaveLength(1);
-      expect(ctx.pageObjects[0].className).toBe('OrdersPage');
-
-      const locatorNames = ctx.pageObjects[0].locators.map(l => l.name);
-      // Direct arrow-function locators
-      expect(locatorNames).toContain('getSearchInput');
-      expect(locatorNames).toContain('getExportButton');
-      expect(locatorNames).toContain('getSelectAllCheckbox');
-
-      // Factory-function locators with qualified names
-      expect(locatorNames).toContain('getFilterGroup().getStatusFilter');
-      expect(locatorNames).toContain('getFilterGroup().getDatePicker');
-
-      // Routes
-      expect(ctx.pageObjects[0].routes).toContain('/orders');
+      expect(ctx.pageObjects[0].filepath).toContain('e2e/pages/login.page.ts');
+      // source field contains the raw file content
+      expect(ctx.pageObjects[0].source).toContain('export class LoginPage');
+      expect(ctx.pageObjects[0].source).toContain('async login(username: string, password: string)');
+      expect(ctx.pageObjects[0].source).toContain('usernameInput');
+      expect(ctx.pageObjects[0].source).toContain('submitButton');
     });
 
     it('skips files without exported classes', async () => {
@@ -226,8 +121,8 @@ export const TIMEOUT = 5000;
   });
 
   describe('utility discovery', () => {
-    it('discovers exported functions and constants', async () => {
-      writeFile('e2e/helpers/auth.ts', `
+    it('discovers utilities with filepath and source', async () => {
+      const sourceContent = `
 export async function loginAsAdmin(page: Page) {
   await page.goto('/login');
   await page.fill('#email', 'admin@example.com');
@@ -240,16 +135,19 @@ export const DEFAULT_TIMEOUT = 5000;
 export const setupAuth = async (page: Page, role: string) => {
   await page.goto('/auth');
 };
-`);
+`;
+      writeFile('e2e/helpers/auth.ts', sourceContent);
 
       const config = makeConfig({ utilityPatterns: [path.join(tmpDir, '**/helpers/**/*.ts')] });
       const scanner = new ProjectScanner(config);
       const ctx = await scanner.scan(makeDiff());
 
       expect(ctx.utilities).toHaveLength(1);
-      expect(ctx.utilities[0].exportedFunctions).toContain('loginAsAdmin(page: Page)');
-      expect(ctx.utilities[0].exportedFunctions).toContain('setupAuth(page: Page, role: string)');
-      expect(ctx.utilities[0].exportedConstants).toContain('DEFAULT_TIMEOUT');
+      expect(ctx.utilities[0].filepath).toContain('e2e/helpers/auth.ts');
+      // source field contains the raw file content
+      expect(ctx.utilities[0].source).toContain('export async function loginAsAdmin');
+      expect(ctx.utilities[0].source).toContain('DEFAULT_TIMEOUT');
+      expect(ctx.utilities[0].source).toContain('setupAuth');
     });
 
     it('skips files with no exports', async () => {

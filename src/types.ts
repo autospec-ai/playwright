@@ -95,24 +95,15 @@ export interface TestPlanEntry {
 
 // ─── Project Structure Discovery Types ───
 
-export interface LocatorInfo {
-  name: string;               // e.g. "submitButton"
-  selector: string;           // e.g. "page.getByRole('button', { name: 'Submit' })"
-  source: string;             // filepath where defined
-}
-
 export interface PageObjectInfo {
   filepath: string;           // relative path
   className: string;          // e.g. "LoginPage"
-  exportedMethods: string[];  // e.g. ["login(username, password)", "getErrorMessage()"]
-  locators: LocatorInfo[];    // extracted locator definitions
-  routes: string[];           // navigation URLs from goto/navigate methods
+  source: string;             // truncated raw source code
 }
 
 export interface UtilityInfo {
   filepath: string;
-  exportedFunctions: string[];  // e.g. ["loginAsAdmin(page)", "clearDatabase()"]
-  exportedConstants: string[];  // e.g. ["BASE_URL", "DEFAULT_TIMEOUT"]
+  source: string;             // truncated raw source code
 }
 
 export interface TestCoverageInfo {
@@ -151,6 +142,7 @@ export interface ActionConfig {
   // Feature: Project Structure Discovery
   pomPatterns: string[];
   utilityPatterns: string[];
+  pomOutputDirectory: string;
   projectContextBudget: number;
 
   // Feature: Trace Viewer Integration

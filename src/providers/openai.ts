@@ -26,7 +26,7 @@ export class OpenAIProvider implements LLMClient {
       model: this.model,
       ...(isReasoning
         ? { max_completion_tokens: options?.maxTokens ?? 8192 }
-        : { max_tokens: options?.maxTokens ?? 8192, temperature: options?.temperature ?? 0.2 }),
+        : { max_tokens: options?.maxTokens ?? 8192, temperature: options?.temperature ?? 0 }),
       messages: messages.map(m => ({
         role: m.role,
         content: m.content,

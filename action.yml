@@ -87,6 +87,10 @@ inputs:
     description: 'Comma-separated glob patterns for helper/utility files (e.g., **/helpers/**/*.ts,**/utils/**/*.ts). Auto-detected when empty.'
     required: false
     default: ''
+  pom_output_directory:
+    description: 'Directory where generated page object files will be written. When set, the LLM creates POM files separately instead of inlining classes in test specs.'
+    required: false
+    default: ''
   project_context_budget:
     description: 'Approximate token budget for project context injected into LLM prompts'
     required: false

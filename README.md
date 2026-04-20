@@ -120,14 +120,14 @@ npx playwright test --update-snapshots
 ```
 
 ### Project Structure Discovery
-AutoSpec scans your project for existing page objects, utility functions, and test coverage before generating tests. This prevents the LLM from hallucinating locators, POM classes, or helpers that don't exist — and ensures generated tests reuse what's already there with correct import paths.
+AutoSpec scans your project for existing page objects, utility functions, and test coverage before generating tests. It injects the **actual source code** of discovered POM classes and utilities into the LLM prompt, so the model can see exactly what methods, elements, and locators exist — no regex extraction, no guessing.
 
 **What it discovers:**
-- **Page Objects** — Classes with locators (`getByRole`, `getByTestId`, `locator`) and public methods
-- **Utilities** — Exported helper functions and constants
-- **Test Coverage** — Routes, flows, and page objects already under test
+- **Page Objects** — Full source of classes matching POM patterns (methods, elements, locators, routes — everything)
+- **Utilities** — Full source of exported helper functions and constants
+- **Test Coverage** — Individual test names, flows, and routes already under test (so the LLM doesn't duplicate them)
 
-**Auto-detection** works out of the box for common conventions (`**/pages/**/*.ts`, `**/*.page.ts`, `**/helpers/**/*.ts`, etc.). If your project uses different naming, configure the patterns explicitly:
+**Auto-detection** works out of the box for common conventions (`**/pages/**/*.ts`, `**/*.page.ts`, `**/*.po.ts`, `**/helpers/**/*.ts`, etc.). If your project uses different naming, configure the patterns explicitly:
 
 ```yaml
 - uses: autospec-ai/action@v1
@@ -136,8 +136,11 @@ AutoSpec scans your project for existing page objects, utility functions, and te
     test_directory: 'e2e/tests'                        # where to write generated tests
     pom_patterns: '**/*.po.ts,**/pageobjects/**/*.ts'  # match your POM convention
     utility_patterns: '**/helpers/**/*.ts'              # match your utility convention
-    project_context_budget: '10000'                     # increase if you have many POMs
+    pom_output_directory: 'e2e/pages'                   # where to write NEW POM files
+    project_context_budget: '12000'                     # increase if you have many POMs
 ```
+
+**`pom_output_directory`** — When set, the LLM can create new page object classes as separate files instead of inlining them in test specs. If not set, the LLM is instructed to only use existing POMs or raw `page.locator()` calls.
 
 **Tip:** Check the Action logs for `Discovered: X page objects, Y utility files, Z tested files` to verify the scanner is finding your project's artifacts. If the counts are 0, your file naming doesn't match the default patterns — set `pom_patterns` and `utility_patterns` explicitly.
 
@@ -203,10 +206,11 @@ axe_standard: 'wcag2aa'  # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
 |-------|---------|-------------|
 | `pom_patterns` | *(auto-detected)* | Comma-separated globs for page object files (e.g., `**/*.po.ts,**/pages/**/*.ts`) |
 | `utility_patterns` | *(auto-detected)* | Comma-separated globs for helper/utility files (e.g., `**/helpers/**/*.ts`) |
+| `pom_output_directory` | — | Directory for generated POM files. When set, the LLM creates new POMs as separate files instead of inlining them in test specs |
 | `project_context_budget` | `8000` | Approximate token budget for project context injected into LLM prompts |
 
 When left empty, the scanner uses built-in patterns:
-- **Page Objects:** `**/*.page.ts`, `**/pages/**/*.ts`, `**/page-objects/**/*.ts`, `**/*.pom.ts`, `**/pom/**/*.ts`
+- **Page Objects:** `**/*.page.ts`, `**/pages/**/*.ts`, `**/page-objects/**/*.ts`, `**/*.pom.ts`, `**/*.po.ts`, `**/pom/**/*.ts`
 - **Utilities:** `**/helpers/**/*.ts`, `**/utils/**/*.ts`, `**/fixtures/**/*.ts`, `**/support/**/*.ts`, `**/*.helper.ts`, `**/*.util.ts`
 
 ### Accessibility
