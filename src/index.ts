@@ -256,7 +256,11 @@ function getBaseBranch(): string {
   if (context.payload.pull_request) {
     return context.payload.pull_request.base.ref;
   }
-  return context.ref.replace('refs/heads/', '');
+  // For push events, target the PR's source branch (the branch being pushed to).
+  // The AutoSpec PR should merge INTO this branch, not into main.
+  const branch = context.ref.replace('refs/heads/', '');
+  core.info(`Base branch for AutoSpec PR: ${branch} (from ${context.eventName} event)`);
+  return branch;
 }
 
 // ─── Outputs ───
