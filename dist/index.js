@@ -36239,6 +36239,7 @@ const DEFAULT_POM_PATTERNS = [
     '**/page-objects/**/*.ts',
     '**/page-object/**/*.ts',
     '**/*.pom.ts',
+    '**/*.po.ts',
     '**/pom/**/*.ts',
 ];
 const DEFAULT_UTILITY_PATTERNS = [
@@ -36250,7 +36251,7 @@ const DEFAULT_UTILITY_PATTERNS = [
     '**/*.util.ts',
 ];
 const GLOBAL_IGNORE = ['**/node_modules/**', '**/dist/**', '**/.git/**', '**/*.d.ts', '**/*.min.*'];
-const MAX_FILE_SIZE = 30_000; // 30KB per file, matching existing convention
+const MAX_FILE_SIZE = 50_000; // 50KB per file
 class ProjectScanner {
     config;
     constructor(config) {
@@ -36265,8 +36266,7 @@ class ProjectScanner {
         ]);
         core.info(`Discovered: ${pageObjects.length} page objects, ${utilities.length} utility files, ${coverage.length} tested files`);
         // Score by relevance to the current diff and trim to budget
-        const scored = this.applyRelevanceAndBudget(pageObjects, utilities, coverage, diff);
-        return scored;
+        return this.applyRelevanceAndBudget(pageObjects, utilities, coverage, diff);
     }
     // ─── Page Object Discovery ───
     async discoverPageObjects() {
@@ -36279,54 +36279,14 @@ class ProjectScanner {
             const content = this.readFileSafe(filepath);
             if (!content)
                 continue;
-            const info = this.extractPageObject(filepath, content);
-            if (info)
-                results.push(info);
+            // Must export a class to be considered a page object
+            const classMatch = content.match(/export\s+(?:default\s+)?class\s+(\w+)/);
+            if (!classMatch)
+                continue;
+            const rel = path.relative(process.cwd(), filepath);
+            results.push({ filepath: rel, className: classMatch[1], source: content });
         }
         return results;
-    }
-    extractPageObject(filepath, content) {
-        // Extract class name
-        const classMatch = content.match(/export\s+(?:default\s+)?class\s+(\w+)/);
-        if (!classMatch)
-            return null;
-        const className = classMatch[1];
-        const rel = path.relative(process.cwd(), filepath);
-        // Extract method signatures (public methods in the class)
-        const methods = [];
-        const methodRegex = /(?:async\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*[^{]+?)?\s*\{/g;
-        let match;
-        while ((match = methodRegex.exec(content)) !== null) {
-            const name = match[1];
-            const params = match[2].trim();
-            // Skip constructor and private-looking methods
-            if (name === 'constructor' || name.startsWith('_'))
-                continue;
-            methods.push(params ? `${name}(${params})` : `${name}()`);
-        }
-        // Extract locator definitions
-        const locators = this.extractLocators(rel, content);
-        return { filepath: rel, className, exportedMethods: methods, locators };
-    }
-    extractLocators(filepath, content) {
-        const locators = [];
-        // Pattern: this.someLocator = page.getByRole/getByText/getByTestId/locator(...)
-        const assignmentRegex = /(?:this\.)?(\w+)\s*=\s*((?:page|this\.page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-        let match;
-        while ((match = assignmentRegex.exec(content)) !== null) {
-            locators.push({ name: match[1], selector: match[2], source: filepath });
-        }
-        // Pattern: get someLocator() { return this.page.getByRole(...) }
-        const getterRegex = /get\s+(\w+)\s*\(\)\s*\{[^}]*return\s+((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-        while ((match = getterRegex.exec(content)) !== null) {
-            locators.push({ name: match[1], selector: match[2], source: filepath });
-        }
-        // Pattern: readonly someLocator = this.page.getByRole(...)
-        const readonlyRegex = /(?:readonly\s+)(\w+)\s*=\s*((?:this\.page|page)\.(getBy\w+|locator)\s*\([^)]+\))/g;
-        while ((match = readonlyRegex.exec(content)) !== null) {
-            locators.push({ name: match[1], selector: match[2], source: filepath });
-        }
-        return locators;
     }
     // ─── Utility Discovery ───
     async discoverUtilities() {
@@ -36339,39 +36299,13 @@ class ProjectScanner {
             const content = this.readFileSafe(filepath);
             if (!content)
                 continue;
-            const info = this.extractUtility(filepath, content);
-            if (info)
-                results.push(info);
+            // Must have at least one export
+            if (!/export\s/.test(content))
+                continue;
+            const rel = path.relative(process.cwd(), filepath);
+            results.push({ filepath: rel, source: content });
         }
         return results;
-    }
-    extractUtility(filepath, content) {
-        const rel = path.relative(process.cwd(), filepath);
-        const functions = [];
-        const constants = [];
-        // Exported functions
-        const fnRegex = /export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/g;
-        let match;
-        while ((match = fnRegex.exec(content)) !== null) {
-            const name = match[1];
-            const params = match[2].trim();
-            functions.push(params ? `${name}(${params})` : `${name}()`);
-        }
-        // Exported arrow functions: export const foo = async (params) => ...
-        const arrowRegex = /export\s+const\s+(\w+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::\s*[^=]+?)?\s*=>/g;
-        while ((match = arrowRegex.exec(content)) !== null) {
-            const name = match[1];
-            const params = match[2].trim();
-            functions.push(params ? `${name}(${params})` : `${name}()`);
-        }
-        // Exported constants (non-function)
-        const constRegex = /export\s+const\s+(\w+)\s*(?::\s*[^=]+?)?\s*=\s*(?!(?:async\s*)?\()/g;
-        while ((match = constRegex.exec(content)) !== null) {
-            constants.push(match[1]);
-        }
-        if (functions.length === 0 && constants.length === 0)
-            return null;
-        return { filepath: rel, exportedFunctions: functions, exportedConstants: constants };
     }
     // ─── Test Coverage Analysis ───
     async analyzeTestCoverage() {
@@ -36403,17 +36337,16 @@ class ProjectScanner {
         const importedPageObjects = [];
         const describedFlows = [];
         const testNames = [];
+        let match;
         // Routes: page.goto('...') or page.navigate('...')
         const routeRegex = /(?:page\.goto|page\.navigate)\s*\(\s*['"`]([^'"`]+)/g;
-        let match;
         while ((match = routeRegex.exec(content)) !== null) {
             routes.push(match[1]);
         }
-        // Imported page objects: import { LoginPage } from '...'
+        // Imported page objects
         const importRegex = /import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
         while ((match = importRegex.exec(content)) !== null) {
             const importPath = match[2];
-            // Heuristic: if the import path contains 'page', 'pom', or 'object', it's likely a POM import
             if (/page|pom|object/i.test(importPath)) {
                 const names = match[1].split(',').map(s => s.trim()).filter(Boolean);
                 importedPageObjects.push(...names);
@@ -36424,7 +36357,7 @@ class ProjectScanner {
         while ((match = describeRegex.exec(content)) !== null) {
             describedFlows.push(match[1]);
         }
-        // test() names
+        // test() names — captures what's actually being tested
         const testRegex = /\btest\s*\(\s*['"`]([^'"`]+)/g;
         while ((match = testRegex.exec(content)) !== null) {
             testNames.push(match[1]);
@@ -36439,38 +36372,29 @@ class ProjectScanner {
         const pomBudget = Math.floor(budget * 0.5);
         const utilBudget = Math.floor(budget * 0.2);
         const coverageBudget = Math.floor(budget * 0.3);
-        // Score and sort page objects
+        // Score and sort page objects by relevance to the diff
         const scoredPom = pageObjects
             .map(po => ({ item: po, score: this.scoreRelevance(po.filepath, po.className, diff) }))
             .sort((a, b) => b.score - a.score);
-        // Score and sort utilities
         const scoredUtil = utilities
             .map(u => ({ item: u, score: this.scoreRelevance(u.filepath, null, diff) }))
             .sort((a, b) => b.score - a.score);
-        // Trim to budget
-        const trimmedPom = this.trimToTokenBudget(scoredPom.map(s => s.item), pomBudget, (po) => this.estimatePageObjectTokens(po));
-        const trimmedUtil = this.trimToTokenBudget(scoredUtil.map(s => s.item), utilBudget, (u) => this.estimateUtilityTokens(u));
+        // Trim source to fit budget (truncate individual files if needed)
+        const trimmedPom = this.trimSourcesToBudget(scoredPom.map(s => s.item), pomBudget);
+        const trimmedUtil = this.trimSourcesToBudget(scoredUtil.map(s => s.item), utilBudget);
         const trimmedCoverage = this.trimToTokenBudget(coverage, coverageBudget, (c) => this.estimateCoverageTokens(c));
-        return {
-            pageObjects: trimmedPom,
-            utilities: trimmedUtil,
-            coverage: trimmedCoverage,
-        };
+        return { pageObjects: trimmedPom, utilities: trimmedUtil, coverage: trimmedCoverage };
     }
     scoreRelevance(filepath, className, diff) {
-        let score = 1; // base score
-        const changedFiles = diff.files;
+        let score = 1;
         const fileDir = path.dirname(filepath);
-        for (const changed of changedFiles) {
-            // Check if any changed file imports this file
+        for (const changed of diff.files) {
             if (changed.fullContent && this.contentReferencesFile(changed.fullContent, filepath)) {
                 score += 10;
             }
-            // Same directory
             if (path.dirname(changed.filename) === fileDir) {
                 score += 5;
             }
-            // Class/function name appears in changed file content
             if (className && changed.fullContent && changed.fullContent.includes(className)) {
                 score += 3;
             }
@@ -36478,10 +36402,33 @@ class ProjectScanner {
         return score;
     }
     contentReferencesFile(content, filepath) {
-        // Check if the content imports from this filepath (with or without extension)
         const withoutExt = filepath.replace(/\.\w+$/, '');
         const basename = path.basename(withoutExt);
         return content.includes(basename);
+    }
+    /**
+     * Trim source-carrying items to a token budget.
+     * High-relevance items get more space; low-relevance items may be truncated or dropped.
+     */
+    trimSourcesToBudget(items, budgetTokens) {
+        const result = [];
+        let usedTokens = 0;
+        // Per-file cap: no single file takes more than 40% of the category budget
+        const perFileCap = Math.floor(budgetTokens * 0.4);
+        for (const item of items) {
+            let tokens = Math.ceil(item.source.length / 4);
+            if (tokens > perFileCap) {
+                // Truncate the source to fit the per-file cap
+                const maxChars = perFileCap * 4;
+                item.source = item.source.slice(0, maxChars) + '\n// ... (truncated)';
+                tokens = perFileCap;
+            }
+            if (usedTokens + tokens > budgetTokens)
+                break;
+            result.push(item);
+            usedTokens += tokens;
+        }
+        return result;
     }
     trimToTokenBudget(items, budgetTokens, estimator) {
         const result = [];
@@ -36494,18 +36441,6 @@ class ProjectScanner {
             usedTokens += cost;
         }
         return result;
-    }
-    estimatePageObjectTokens(po) {
-        let chars = po.filepath.length + po.className.length;
-        chars += po.exportedMethods.join(', ').length;
-        chars += po.locators.map(l => `${l.name}: ${l.selector}`).join(', ').length;
-        return Math.ceil(chars / 4);
-    }
-    estimateUtilityTokens(u) {
-        let chars = u.filepath.length;
-        chars += u.exportedFunctions.join(', ').length;
-        chars += u.exportedConstants.join(', ').length;
-        return Math.ceil(chars / 4);
     }
     estimateCoverageTokens(c) {
         let chars = c.filepath.length;
@@ -36601,6 +36536,11 @@ class PromptBuilder {
     setProjectContext(ctx) {
         this.projectContext = ctx;
     }
+    /** Returns true when the scanner discovered page objects or utilities. */
+    hasProjectArtifacts() {
+        return !!this.projectContext && (this.projectContext.pageObjects.length > 0 ||
+            this.projectContext.utilities.length > 0);
+    }
     // ─── Phase 1: Test Planning ───
     buildPlanPrompt(diff, existingTests) {
         const existingTestList = existingTests
@@ -36638,10 +36578,11 @@ ${this.buildProjectContextForPlan()}
 3. Skip changes that are purely internal/backend with no UI impact, unless they affect API responses rendered in the UI.
 4. Prioritize: new features > modified flows > edge cases.
 5. Don't duplicate coverage already in existing tests unless the behavior changed.
-6. MUST reuse existing page objects and their locators listed above rather than inventing new ones.
+${this.hasProjectArtifacts() ? `6. MUST reuse existing page objects and their locators listed above rather than inventing new ones.
 7. MUST use existing utility functions where applicable.
 8. Do NOT generate tests for user flows already covered in existing test coverage unless the behavior changed in this diff.
-9. Assign a severity to each test based on the user impact of what it validates:
+9.` : `6. Do NOT generate tests for user flows already covered in existing test coverage unless the behavior changed in this diff.
+7.`} Assign a severity to each test based on the user impact of what it validates:
    - sev1 (Critical): Core user flows — authentication, checkout, data loss prevention, payment processing
    - sev2 (High): Important features, commonly used paths, key business logic
    - sev3 (Medium): Secondary features, less frequent user flows, settings pages
@@ -36734,7 +36675,7 @@ ${this.buildProjectContextForTest(plan.testFilename)}
 2. Import from '@playwright/test' (test, expect, Page).
 3. Use test.describe() blocks to group related tests.
 4. Use descriptive test names that explain the expected behavior.
-5. Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects. Do NOT invent page objects or utility functions that are not listed.
+${this.hasProjectArtifacts() ? `5. Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects. Do NOT invent page objects or utility functions that are not listed.` : `5. Use accessible selectors (role, label, text) or data-testid attributes for locators.`}
 6. Add meaningful assertions — not just "page loads".
 7. Use data-testid selectors when inferrable, otherwise use accessible selectors (role, label, text).
 8. Handle async operations with proper waitFor / expect patterns.
@@ -36813,49 +36754,38 @@ Generate a SEPARATE test case that runs an axe-core accessibility scan:
         if (!this.projectContext)
             return '';
         const sections = [];
-        // Page objects catalog
+        // Page objects — show actual source code so the LLM sees exactly what exists
         if (this.projectContext.pageObjects.length > 0) {
-            const items = this.projectContext.pageObjects.map(po => {
-                const methods = po.exportedMethods.length > 0
-                    ? `: ${po.exportedMethods.join(', ')}`
-                    : '';
-                const locatorNames = po.locators.map(l => l.name);
-                const locators = locatorNames.length > 0
-                    ? ` | Locators: ${locatorNames.join(', ')}`
-                    : '';
-                return `- ${po.className} (${po.filepath})${methods}${locators}`;
-            }).join('\n');
-            sections.push(`## Available Page Objects
-The project already has these page object classes. REUSE them — do not invent new ones.
+            const items = this.projectContext.pageObjects.map(po => `### ${po.className} (${po.filepath})\n\`\`\`typescript\n${po.source}\n\`\`\``).join('\n\n');
+            sections.push(`## Available Page Objects — REAL SOURCE CODE
+The project already has these page object classes. Read the source carefully — use ONLY the classes, methods, elements, and locators that actually exist in this code.
 ${items}`);
         }
-        // Utilities catalog
+        // Utilities — show actual source
         if (this.projectContext.utilities.length > 0) {
-            const items = this.projectContext.utilities.map(u => {
-                const fns = u.exportedFunctions.length > 0
-                    ? u.exportedFunctions.join(', ')
-                    : '';
-                return `- ${u.filepath}: ${fns}`;
-            }).join('\n');
-            sections.push(`## Available Utilities
-These helper functions exist in the project. Use them instead of writing inline equivalents.
+            const items = this.projectContext.utilities.map(u => `### ${u.filepath}\n\`\`\`typescript\n${u.source}\n\`\`\``).join('\n\n');
+            sections.push(`## Available Utilities — REAL SOURCE CODE
+These utility files exist in the project. Use the functions and constants you see in the source.
 ${items}`);
         }
-        // Coverage summary
+        // Coverage — show individual test names so LLM can see what's already tested
         if (this.projectContext.coverage.length > 0) {
-            const allRoutes = [...new Set(this.projectContext.coverage.flatMap(c => c.routes))];
-            const allFlows = [...new Set(this.projectContext.coverage.flatMap(c => c.describedFlows))];
-            const parts = [];
-            if (allRoutes.length > 0) {
-                parts.push(`Already tested routes: ${allRoutes.join(', ')}`);
-            }
-            if (allFlows.length > 0) {
-                parts.push(`Already tested flows: ${allFlows.join(', ')}`);
-            }
-            if (parts.length > 0) {
-                sections.push(`## Existing Test Coverage
-${parts.join('\n')}`);
-            }
+            const items = this.projectContext.coverage.map(c => {
+                const parts = [`- ${c.filepath}`];
+                if (c.describedFlows.length > 0) {
+                    parts.push(`  Flows: ${c.describedFlows.join(', ')}`);
+                }
+                if (c.testNames.length > 0) {
+                    parts.push(`  Tests: ${c.testNames.join(' | ')}`);
+                }
+                if (c.routes.length > 0) {
+                    parts.push(`  Routes: ${c.routes.join(', ')}`);
+                }
+                return parts.join('\n');
+            }).join('\n');
+            sections.push(`## Existing Test Coverage
+These tests already exist. Do NOT duplicate them — only generate tests for NEW or CHANGED behavior.
+${items}`);
         }
         return sections.length > 0 ? '\n' + sections.join('\n\n') + '\n' : '';
     }
@@ -36865,38 +36795,44 @@ ${parts.join('\n')}`);
         const sections = [];
         const testOutputPath = path.join(this.config.testDirectory, testFilename);
         const testDir = path.dirname(testOutputPath);
-        // Page objects with import paths
+        // Page objects — exact import statement + full source
         if (this.projectContext.pageObjects.length > 0) {
             const items = this.projectContext.pageObjects.map(po => {
                 const relativePath = this.computeImportPath(testDir, po.filepath);
-                const methodList = po.exportedMethods.length > 0
-                    ? `Methods: ${po.exportedMethods.join(', ')}`
-                    : '';
-                const locatorList = po.locators.length > 0
-                    ? `Locators: ${po.locators.map(l => `${l.name} = ${l.selector}`).join(', ')}`
-                    : '';
-                const details = [methodList, locatorList].filter(Boolean).join('\n');
-                return `### ${po.className} (from '${relativePath}')
-${details}`;
+                return `### ${po.className}
+\`import { ${po.className} } from '${relativePath}';\`
+\`\`\`typescript
+${po.source}
+\`\`\``;
             }).join('\n\n');
-            sections.push(`## Page Objects Available for Import
+            sections.push(`## Page Objects — REAL SOURCE CODE
+Use EXACTLY the import statements shown. Only use methods, elements, and locators that exist in the source below.
 ${items}`);
         }
-        // Utilities with import paths
+        // Utilities — exact import path + full source
         if (this.projectContext.utilities.length > 0) {
             const items = this.projectContext.utilities.map(u => {
                 const relativePath = this.computeImportPath(testDir, u.filepath);
-                const fns = u.exportedFunctions.join(', ');
-                return `- import { ${fns} } from '${relativePath}'`;
-            }).join('\n');
-            sections.push(`## Utility Functions Available
+                return `### ${u.filepath}
+Import from: \`'${relativePath}'\`
+\`\`\`typescript
+${u.source}
+\`\`\``;
+            }).join('\n\n');
+            sections.push(`## Utility Functions — REAL SOURCE CODE
 ${items}`);
         }
         if (sections.length > 0) {
-            sections.push(`## IMPORTANT
-- Use the page objects and utilities listed above. Do NOT create inline locators for elements that already have locators in page objects.
-- Do NOT invent page objects, locators, or utility functions that are not listed above.
-- Import paths above are relative from the test file location.`);
+            const pomRule = this.config.pomOutputDirectory
+                ? `- If you need a NEW page object class that doesn't exist above, create it as a SEPARATE file. The file must be placed under "${this.config.pomOutputDirectory}/" and returned as an additional code block with a "// POM_FILE: <filename>" header on the first line.`
+                : `- Do NOT create page object classes inline in test files — use the existing ones above.`;
+            sections.push(`## CRITICAL RULES
+- Copy import statements EXACTLY as shown — class names and paths must match character-for-character.
+- ONLY use methods, elements, locators, and properties that exist in the source code above.
+- Do NOT invent, guess, or hallucinate any methods, elements, or locators.
+- Do NOT rename or abbreviate class names.
+${pomRule}
+- If the existing page objects don't have what you need, use raw \`page.locator()\` or \`page.getByTestId()\` calls instead of inventing POM methods.`);
         }
         return sections.length > 0 ? '\n' + sections.join('\n\n') + '\n' : '';
     }
@@ -37036,6 +36972,7 @@ class TestGenerator {
     llm;
     prompts;
     extractedFixtures = [];
+    generatedPomFiles = [];
     constructor(config, llm) {
         this.config = config;
         this.llm = llm;
@@ -37113,6 +37050,50 @@ class TestGenerator {
     getExtractedFixtures() {
         return this.extractedFixtures;
     }
+    getGeneratedPomFiles() {
+        return this.generatedPomFiles;
+    }
+    async writePomFiles() {
+        if (this.generatedPomFiles.length === 0)
+            return [];
+        const written = [];
+        for (const pom of this.generatedPomFiles) {
+            const fullPath = path.resolve(pom.filepath);
+            const dir = path.dirname(fullPath);
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(fullPath, pom.content, 'utf-8');
+            written.push(pom.filepath);
+            core.info(`Wrote POM: ${pom.filepath}`);
+        }
+        return written;
+    }
+    /**
+     * Extract `// POM_FILE: <filename>` blocks from LLM output.
+     * Returns the test code with POM blocks removed.
+     */
+    extractPomFiles(code) {
+        const pomDir = this.config.pomOutputDirectory;
+        if (!pomDir)
+            return code;
+        const pomMarker = /^\/\/\s*POM_FILE:\s*(.+)$/gm;
+        const parts = code.split(pomMarker);
+        // If no POM_FILE markers found, return code as-is
+        if (parts.length <= 1)
+            return code;
+        // parts[0] is the test code before any POM_FILE marker
+        // parts[1] is the filename, parts[2] is the POM content, etc.
+        const testCode = parts[0];
+        for (let i = 1; i < parts.length; i += 2) {
+            const filename = parts[i].trim();
+            const pomContent = (parts[i + 1] || '').trim();
+            if (filename && pomContent) {
+                const filepath = path.join(pomDir, filename);
+                this.generatedPomFiles.push({ filename, filepath, content: pomContent });
+                core.info(`Extracted POM file: ${filepath}`);
+            }
+        }
+        return testCode.trim();
+    }
     // ─── Phase 1: Planning ───
     async generatePlan(diff, existingTests) {
         const prompt = this.prompts.buildPlanPrompt(diff, existingTests);
@@ -37122,7 +37103,7 @@ class TestGenerator {
                 content: 'You are a QA automation architect. Respond only with valid JSON. No markdown, no explanation.',
             },
             { role: 'user', content: prompt },
-        ], { maxTokens: 4096, temperature: 0.1 });
+        ], { maxTokens: 4096, temperature: 0 });
         // Parse the JSON response
         const cleaned = response.content
             .replace(/```json\s*/g, '')
@@ -37147,12 +37128,16 @@ class TestGenerator {
                 content: 'You are an expert Playwright test author. Respond with ONLY valid TypeScript code. No markdown fences, no commentary.',
             },
             { role: 'user', content: prompt },
-        ], { maxTokens: 8192, temperature: 0.2 });
+        ], { maxTokens: 8192, temperature: 0 });
         // Clean potential markdown fences from response
         let code = response.content
             .replace(/^```(?:typescript|ts)?\s*\n?/gm, '')
             .replace(/\n?```\s*$/gm, '')
             .trim();
+        // ─── Extract POM files if pomOutputDirectory is configured ───
+        if (this.config.pomOutputDirectory) {
+            code = this.extractPomFiles(code);
+        }
         // Ensure the file starts with an import
         if (!code.startsWith('import')) {
             const importIndex = code.indexOf('import');
@@ -37350,6 +37335,14 @@ async function run() {
         core.startGroup('💾 Writing test files');
         const writtenFiles = await generator.writeTests(tests);
         core.endGroup();
+        // Write POM files (when pomOutputDirectory is configured)
+        let pomFiles = [];
+        if (config.pomOutputDirectory && generator.getGeneratedPomFiles().length > 0) {
+            core.startGroup('📄 Writing page object files');
+            pomFiles = await generator.writePomFiles();
+            core.info(`Wrote ${pomFiles.length} page object file(s)`);
+            core.endGroup();
+        }
         // Write fixture files (API mock extraction)
         let fixtureFiles = [];
         if (config.generateApiMocks) {
@@ -37461,6 +37454,7 @@ function parseConfig() {
         // Feature: Project Structure Discovery
         pomPatterns: parseCSV(core.getInput('pom_patterns')),
         utilityPatterns: parseCSV(core.getInput('utility_patterns')),
+        pomOutputDirectory: core.getInput('pom_output_directory') || '',
         projectContextBudget: parseInt(core.getInput('project_context_budget') || '8000', 10),
         // Feature: Trace Viewer Integration
         traceOnFailure: core.getBooleanInput('trace_on_failure'),
@@ -37491,7 +37485,11 @@ function getBaseBranch() {
     if (context.payload.pull_request) {
         return context.payload.pull_request.base.ref;
     }
-    return context.ref.replace('refs/heads/', '');
+    // For push events, target the PR's source branch (the branch being pushed to).
+    // The AutoSpec PR should merge INTO this branch, not into main.
+    const branch = context.ref.replace('refs/heads/', '');
+    core.info(`Base branch for AutoSpec PR: ${branch} (from ${context.eventName} event)`);
+    return branch;
 }
 // ─── Outputs ───
 function setOutputs(result) {
@@ -37592,7 +37590,7 @@ class AnthropicProvider {
         const response = await this.client.messages.create({
             model: this.model,
             max_tokens: options?.maxTokens ?? 8192,
-            temperature: options?.temperature ?? 0.2,
+            temperature: options?.temperature ?? 0,
             ...(systemMsg ? { system: systemMsg.content } : {}),
             messages: chatMessages,
         });
@@ -37676,7 +37674,7 @@ class OpenAIProvider {
             model: this.model,
             ...(isReasoning
                 ? { max_completion_tokens: options?.maxTokens ?? 8192 }
-                : { max_tokens: options?.maxTokens ?? 8192, temperature: options?.temperature ?? 0.2 }),
+                : { max_tokens: options?.maxTokens ?? 8192, temperature: options?.temperature ?? 0 }),
             messages: messages.map(m => ({
                 role: m.role,
                 content: m.content,
@@ -37945,6 +37943,12 @@ class GitOps {
         const context = github.context;
         const shortSha = sanitizeForCommitMessage(headSha.slice(0, 8));
         const branchName = `autospec/tests-${shortSha}`;
+        // ─── Dedup: skip if an AutoSpec PR already exists for this commit ───
+        const existingPr = await this.findExistingAutoSpecPR(shortSha);
+        if (existingPr) {
+            core.info(`AutoSpec PR #${existingPr} already exists for commit ${shortSha} — skipping duplicate PR creation`);
+            return existingPr;
+        }
         // Create and push branch
         await this.execGit('config', 'user.name', 'autospec-ai[bot]');
         await this.execGit('config', 'user.email', 'autospec-ai[bot]@users.noreply.github.com');
@@ -38043,6 +38047,28 @@ ${config?.accessibilityAssertions ? '- Aria snapshot assertions validate the acc
 <sub>Generated by AutoSpec AI • [Report Issue](https://github.com/autospec-ai/action/issues)</sub>`;
         return body;
     }
+    /**
+     * Check if an AutoSpec PR already exists for this commit SHA.
+     * Prevents duplicate PRs when the workflow triggers multiple times for the same push.
+     */
+    async findExistingAutoSpecPR(shortSha) {
+        const context = github.context;
+        try {
+            const { data: prs } = await this.octokit.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                head: `${context.repo.owner}:autospec/tests-${shortSha}`,
+            });
+            if (prs.length > 0) {
+                return prs[0].number;
+            }
+        }
+        catch {
+            // If the API call fails, proceed with PR creation
+        }
+        return null;
+    }
     // Note: Uses @actions/exec which passes args as an array (safe from shell injection)
     async execGit(...args) {
         let output = '';
@@ -38090,18 +38116,36 @@ class TestPostProcessor {
             `});`,
             '',
         ].join('\n');
-        // Find the end of the import block (last line starting with "import")
+        // Find the end of the import block (last contiguous import at the top of the file).
+        // Stop scanning once we hit actual code (test, class, const, let, etc.) to avoid
+        // inserting inside class bodies when the LLM emits stray imports mid-file.
         const lines = code.split('\n');
         let lastImportIndex = -1;
+        let inMultiLineImport = false;
         for (let i = 0; i < lines.length; i++) {
             const trimmed = lines[i].trimStart();
+            // Track multi-line imports: import { \n  Foo,\n  Bar\n } from '...';
+            if (inMultiLineImport) {
+                if (trimmed.startsWith('}') || trimmed.includes("} from ")) {
+                    lastImportIndex = i;
+                    inMultiLineImport = false;
+                }
+                continue;
+            }
             if (trimmed.startsWith('import ') || trimmed.startsWith('import{')) {
                 lastImportIndex = i;
+                // Check if this is a multi-line import (has { but no closing } on same line)
+                if (trimmed.includes('{') && !trimmed.includes('}')) {
+                    inMultiLineImport = true;
+                }
+                continue;
             }
-            // Also handle multi-line imports: find closing }
-            if (lastImportIndex >= 0 && trimmed.startsWith('}') && lines[lastImportIndex]?.includes('{')) {
-                lastImportIndex = i;
+            // Skip blank lines and comments between imports
+            if (trimmed === '' || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+                continue;
             }
+            // Any other code means the import block is over — stop scanning
+            break;
         }
         if (lastImportIndex === -1) {
             // No imports found — prepend
