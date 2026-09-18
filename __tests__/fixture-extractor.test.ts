@@ -70,6 +70,18 @@ await page.route('**/api/data', async (route) => {
       expect(blocks).toHaveLength(1);
       expect(blocks[0]).toContain('JSON.stringify');
     });
+
+    it('does not terminate early on parentheses inside strings or comments', () => {
+      const code = `
+await page.route('**/api/(users)', async (route) => {
+  // This closing parenthesis used to confuse the character counter: )
+  await route.fulfill({ json: { label: ')' } });
+});`;
+      const blocks = FixtureExtractor.findRouteBlocks(code);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]).toContain("label: ')' ".trim());
+      expect(blocks[0]).toContain('route.fulfill');
+    });
   });
 
   describe('extractFixtures', () => {
@@ -158,6 +170,41 @@ test('x', async ({ page }) => {
       const tests = [makeTest(code, 'api-heavy.spec.ts')];
       const fixtures = FixtureExtractor.extractFixtures(tests, 3, 'e2e/generated');
       expect(fixtures[0].sourceTestFile).toBe('e2e/generated/api-heavy.spec.ts');
+    });
+
+    it('keeps setup calls in their original test block when another beforeEach lacks page', () => {
+      const routes = ['a', 'b', 'c', 'd']
+        .map(name => `  await page.route('**/${name}', async (route) => { await route.fulfill({ json: {} }); });`)
+        .join('\n');
+      const code = `import { test } from '@playwright/test';
+
+test.beforeEach(async ({ context }) => {
+  await context.clearCookies();
+});
+
+test('routes', async ({ page }) => {
+${routes}
+});`;
+      const tests = [makeTest(code)];
+      FixtureExtractor.extractFixtures(tests, 3, 'e2e/generated');
+
+      expect(tests[0].content).toContain("test.beforeEach(async ({ context })");
+      expect(tests[0].content).not.toContain('clearCookies();\n    await setupApiMocks(page)');
+      expect(tests[0].content).toMatch(/test\('routes'[\s\S]*await setupApiMocks\(page\)/);
+    });
+
+    it('skips extraction when a route depends on surrounding local state', () => {
+      const code = `import { test } from '@playwright/test';
+const sharedResponse = { ok: true };
+test('routes', async ({ page }) => {
+  await page.route('**/a', async (route) => { await route.fulfill({ json: sharedResponse }); });
+  await page.route('**/b', async (route) => { await route.fulfill({ json: sharedResponse }); });
+  await page.route('**/c', async (route) => { await route.fulfill({ json: sharedResponse }); });
+  await page.route('**/d', async (route) => { await route.fulfill({ json: sharedResponse }); });
+});`;
+      const tests = [makeTest(code)];
+      expect(FixtureExtractor.extractFixtures(tests, 3, 'e2e/generated')).toEqual([]);
+      expect(tests[0].content).toBe(code);
     });
   });
 });

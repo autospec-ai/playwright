@@ -15,11 +15,13 @@ function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig {
     autoPr: false,
     maxTestFiles: 5,
     dryRun: true,
+    overwriteExistingFiles: false,
     customInstructions: '',
     pomPatterns: [],
     utilityPatterns: [],
     pomOutputDirectory: '',
     projectContextBudget: 8000,
+    diffContextBudget: 24000,
     traceOnFailure: false,
     traceMode: 'retain-on-failure',
     generateApiMocks: false,
@@ -162,6 +164,23 @@ describe('PromptBuilder with ProjectContext', () => {
       expect(prompt).not.toContain('Available Page Objects');
       expect(prompt).not.toContain('Available Utilities');
       expect(prompt).not.toContain('Existing Test Coverage');
+    });
+
+    it('caps aggregate diff context rather than only truncating each file', () => {
+      const builder = new PromptBuilder(makeConfig({ diffContextBudget: 200 }));
+      const largeDiff = makeDiff();
+      largeDiff.files = Array.from({ length: 20 }, (_, index) => ({
+        filename: `src/file-${index}.ts`,
+        status: 'modified' as const,
+        patch: Array.from({ length: 80 }, () => '+const changed = true;').join('\n'),
+        additions: 80,
+        deletions: 0,
+        fullContent: 'export const source = true;\n'.repeat(500),
+      }));
+
+      const prompt = builder.buildPlanPrompt(largeDiff, []);
+      expect(prompt).toContain('budget truncated');
+      expect(prompt.length).toBeLessThan(10_000);
     });
   });
 

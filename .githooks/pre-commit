@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Rebuilds dist/ whenever src/ is part of the commit and re-stages it.
-# Mirrors the CI check `git diff --exit-code dist/index.js` so it can't fail in CI.
+# Mirrors the CI check `git diff --exit-code dist/` so it can't fail in CI.
 
 set -e
 
-if git diff --cached --name-only | grep -qE '^src/'; then
+if git diff --cached --name-only | grep -qE '^(src/|scripts/build\.mjs$|package(-lock)?\.json$)'; then
   echo "pre-commit: src/ changed — rebuilding dist/"
   npm run --silent build >/dev/null
   if ! git diff --quiet -- dist/; then
     echo "pre-commit: staging refreshed dist/"
-    git add dist/index.js dist/index.js.map
+    git add -- dist/
   fi
 fi

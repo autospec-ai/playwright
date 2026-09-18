@@ -34,11 +34,11 @@ jobs:
   generate-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0  # Required for diff analysis
 
-      - uses: autospec-ai/action@v1
+      - uses: autospec-ai/playwright@v2
         with:
           llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           base_url: 'http://localhost:3000'
@@ -51,7 +51,7 @@ jobs:
 
 ### Anthropic (Default)
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_provider: anthropic
     llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -60,7 +60,7 @@ jobs:
 
 ### OpenAI
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_provider: openai
     llm_api_key: ${{ secrets.OPENAI_API_KEY }}
@@ -69,7 +69,7 @@ jobs:
 
 ### Custom / OpenAI-Compatible (Ollama, Together, Groq, etc.)
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_provider: custom
     llm_api_key: ${{ secrets.TOGETHER_API_KEY }}
@@ -83,11 +83,12 @@ jobs:
 AutoSpec analyzes diffs, plans tests, and generates Playwright specs — all automatically. Tests are severity-tagged (`@sev1` through `@sev4`) and match your existing test style.
 
 ### Trace Viewer Integration
-Captures Playwright traces, screenshots, and video on test failures. Trace files are uploaded as GitHub Actions artifacts for one-click debugging.
+Configures generated tests to capture Playwright traces, screenshots, and video on failures. A bundled post-action runs at the end of the job, after later Playwright steps, and uploads any diagnostics it finds.
 
 ```yaml
 trace_on_failure: 'true'
 trace_mode: 'retain-on-failure'  # on | off | retain-on-failure | on-first-retry
+test_results_directory: 'test-results'
 ```
 
 After a test run, view traces locally:
@@ -130,7 +131,7 @@ AutoSpec scans your project for existing page objects, utility functions, and te
 **Auto-detection** works out of the box for common conventions (`**/pages/**/*.ts`, `**/*.page.ts`, `**/*.po.ts`, `**/helpers/**/*.ts`, etc.). If your project uses different naming, configure the patterns explicitly:
 
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_api_key: ${{ secrets.OPENAI_API_KEY }}
     test_directory: 'e2e/tests'                        # where to write generated tests
@@ -164,7 +165,7 @@ axe_standard: 'wcag2aa'  # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
 | `llm_model` | auto | Model name (provider-specific defaults) |
 | `llm_base_url` | — | Custom endpoint for OpenAI-compatible APIs |
 | `test_directory` | `e2e/generated` | Where to write generated test files |
-| `test_pattern` | `e2e/**/*.spec.ts` | Glob to find existing tests for style matching |
+| `test_pattern` | `e2e/**/*.spec.ts,*-e2e/**/*.spec.ts` | Comma-separated globs for existing tests used as style references |
 | `base_url` | `http://localhost:3000` | App URL for Playwright config |
 | `framework` | `generic` | `react`, `vue`, `svelte`, `angular`, `nextjs`, `generic` |
 | `diff_mode` | `auto` | `auto`, `pr`, or `push` |
@@ -172,8 +173,9 @@ axe_standard: 'wcag2aa'  # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
 | `exclude_paths` | `test/,tests/,...` | Comma-separated path prefixes to exclude |
 | `auto_commit` | `false` | Commit tests directly to the branch |
 | `auto_pr` | `true` | Create a separate PR with generated tests |
-| `max_test_files` | `5` | Cap on tests generated per run |
+| `max_test_files` | `5` | Cap on tests generated per run (1-50) |
 | `dry_run` | `false` | Preview without writing files |
+| `overwrite_existing_files` | `false` | Allow generated artifacts to replace existing files; otherwise collisions fail safely |
 | `custom_instructions` | — | Additional context for the LLM |
 
 ### Trace Viewer
@@ -182,6 +184,7 @@ axe_standard: 'wcag2aa'  # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
 |-------|---------|-------------|
 | `trace_on_failure` | `true` | Enable Playwright trace collection for test failures |
 | `trace_mode` | `retain-on-failure` | Trace mode: `on`, `off`, `retain-on-failure`, `on-first-retry` |
+| `test_results_directory` | `test-results` | Directory scanned by the post-action for traces, screenshots, and videos |
 
 ### API Mock Generation
 
@@ -189,7 +192,7 @@ axe_standard: 'wcag2aa'  # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
 |-------|---------|-------------|
 | `generate_api_mocks` | `false` | Detect API dependencies and generate `page.route()` mocks |
 | `mock_error_states` | `false` | Generate additional test cases for API error responses |
-| `fixture_extraction_threshold` | `3` | Number of `page.route()` calls before extracting into a shared fixture |
+| `fixture_extraction_threshold` | `3` | Number of `page.route()` calls before extracting into a shared fixture (1-100) |
 
 ### Visual Regression
 
@@ -207,7 +210,8 @@ axe_standard: 'wcag2aa'  # wcag2a | wcag2aa | wcag21a | wcag21aa | best-practice
 | `pom_patterns` | *(auto-detected)* | Comma-separated globs for page object files (e.g., `**/*.po.ts,**/pages/**/*.ts`) |
 | `utility_patterns` | *(auto-detected)* | Comma-separated globs for helper/utility files (e.g., `**/helpers/**/*.ts`) |
 | `pom_output_directory` | — | Directory for generated POM files. When set, the LLM creates new POMs as separate files instead of inlining them in test specs |
-| `project_context_budget` | `8000` | Approximate token budget for project context injected into LLM prompts |
+| `project_context_budget` | `8000` | Approximate project-context token budget (100-200,000) |
+| `diff_context_budget` | `24000` | Approximate aggregate diff/source token budget (100-200,000) |
 
 When left empty, the scanner uses built-in patterns:
 - **Page Objects:** `**/*.page.ts`, `**/pages/**/*.ts`, `**/page-objects/**/*.ts`, `**/*.pom.ts`, `**/*.po.ts`, `**/pom/**/*.ts`
@@ -228,6 +232,7 @@ When left empty, the scanner uses built-in patterns:
 | `tests_generated` | Number of test files created |
 | `test_files` | JSON array of generated test file paths |
 | `fixture_files` | JSON array of generated fixture file paths (when API mock generation is enabled) |
+| `pom_files` | JSON array of generated page-object file paths |
 | `pr_number` | PR number (if `auto_pr` is true) |
 | `summary` | Human-readable summary |
 
@@ -235,7 +240,7 @@ When left empty, the scanner uses built-in patterns:
 
 ### All Features Enabled
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
     base_url: 'http://localhost:3000'
@@ -266,7 +271,7 @@ When left empty, the scanner uses built-in patterns:
 
 ### Run Only on Specific Paths
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
     include_paths: 'src/components/,src/pages/'
@@ -275,7 +280,7 @@ When left empty, the scanner uses built-in patterns:
 
 ### Dry Run in CI (Preview Only)
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   id: autospec
   with:
     llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -283,7 +288,7 @@ When left empty, the scanner uses built-in patterns:
 
 - name: Comment preview
   if: github.event_name == 'pull_request' && steps.autospec.outputs.tests_generated != '0'
-  uses: actions/github-script@v7
+  uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
   env:
     TESTS_GENERATED: ${{ steps.autospec.outputs.tests_generated }}
     SUMMARY: ${{ steps.autospec.outputs.summary }}
@@ -301,7 +306,7 @@ When left empty, the scanner uses built-in patterns:
 
 ### Chain with Playwright Execution
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
     auto_pr: 'false'
@@ -313,6 +318,8 @@ When left empty, the scanner uses built-in patterns:
 - name: Run generated tests
   run: npx playwright test e2e/generated/
 ```
+
+The AutoSpec post-action runs after the remaining job steps, even when Playwright fails, and uploads diagnostics from `test_results_directory`.
 
 ### Run Tests by Severity
 ```yaml
@@ -328,7 +335,7 @@ When left empty, the scanner uses built-in patterns:
 
 ### Custom Instructions for Your Codebase
 ```yaml
-- uses: autospec-ai/action@v1
+- uses: autospec-ai/playwright@v2
   with:
     llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
     custom_instructions: |
@@ -354,7 +361,11 @@ If no existing tests are found, it generates clean Playwright tests following of
 
 ```
 src/
-├── index.ts                    # Action entry point, config parsing
+├── main.ts                     # Main Action executable
+├── index.ts                    # Generation workflow orchestration
+├── post-main.ts                # End-of-job post-action executable
+├── post.ts                     # Trace upload orchestration
+├── config.ts                   # Strict Action input parsing and validation
 ├── types.ts                    # Shared TypeScript types
 ├── providers/
 │   ├── index.ts                # Provider factory
@@ -385,15 +396,27 @@ Generated test code passes through a post-processing pipeline in this order:
 
 ### Fixture Extraction
 
-When `generate_api_mocks` is enabled and a test contains more `page.route()` calls than `fixture_extraction_threshold`, the mocks are extracted into a `fixtures/<name>.fixtures.ts` file with a `setupApiMocks(page)` function. The test is rewritten to import and call it.
+When `generate_api_mocks` is enabled and one test or hook contains more `page.route()` calls than `fixture_extraction_threshold`, self-contained mocks are extracted into a `fixtures/<name>.fixtures.ts` file. The TypeScript AST is used to preserve statement boundaries and keep each setup call in its original test or hook. Mocks that depend on surrounding local state remain inline.
+
+## Security and Data Handling
+
+AutoSpec sends selected diffs, changed source files, and discovered test utilities to the configured LLM provider. Exclude sensitive paths, review the provider's data-retention policy, and avoid placing credentials in source files or `custom_instructions`.
+
+Generated plans are schema-validated, generated TypeScript is syntax-checked, output paths are constrained to configured repository directories, and existing files are not overwritten by default. Generated code should still be reviewed before it is merged or executed. Keep workflow permissions minimal and do not use `pull_request_target` to check out untrusted pull-request code alongside repository secrets.
 
 ## Development
 
+Node.js 24 or newer is required.
+
 ```bash
 npm install
-npm run build       # Compile with ncc
+npm run setup-hooks # optional: enable the repository's dist-refresh pre-commit hook
+npm run build       # Produce bundled Node 24 Action entry points with esbuild
 npm run lint
+npm run typecheck
 npm test
+npm run test:coverage
+npm audit --omit=dev
 ```
 
 ## License

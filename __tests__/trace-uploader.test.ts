@@ -1,6 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+
+const mockUploadArtifact = jest.fn().mockResolvedValue({});
+jest.mock('@actions/artifact', () => ({
+  DefaultArtifactClient: jest.fn().mockImplementation(() => ({
+    uploadArtifact: mockUploadArtifact,
+  })),
+}), { virtual: true });
+
 import { TraceUploader } from '../src/utils/trace-uploader';
 
 // Mock @actions/core
@@ -86,11 +94,31 @@ describe('TraceUploader', () => {
   });
 
   describe('uploadTraces', () => {
+    beforeEach(() => mockUploadArtifact.mockClear());
+
     it('handles missing test-results directory gracefully', async () => {
-      // Should not throw — graceful degradation
-      await expect(
-        TraceUploader.uploadTraces('/nonexistent/path')
-      ).resolves.not.toThrow();
+      await expect(TraceUploader.uploadTraces('/nonexistent/path')).resolves.toEqual(
+        expect.objectContaining({ fileCount: 0 })
+      );
+      expect(mockUploadArtifact).not.toHaveBeenCalled();
+    });
+
+    it('uploads discovered diagnostics and returns artifact metadata', async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-upload-test-'));
+      const resultDir = path.join(tmpDir, 'login');
+      fs.mkdirSync(resultDir);
+      fs.writeFileSync(path.join(resultDir, 'trace.zip'), 'trace');
+
+      const result = await TraceUploader.uploadTraces(tmpDir);
+
+      expect(result.fileCount).toBe(1);
+      expect(mockUploadArtifact).toHaveBeenCalledWith(
+        result.artifactName,
+        [path.join(resultDir, 'trace.zip')],
+        tmpDir,
+        { retentionDays: 30 }
+      );
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     });
   });
 });

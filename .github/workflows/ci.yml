@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -10,17 +13,20 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - run: npm ci
       - run: npm run lint
-      - run: npm test
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
+      - run: npm run test:dist
 
-      - name: Verify dist/index.js is up to date
-        run: git diff --exit-code dist/index.js
+      - name: Verify dist is up to date
+        run: git diff --exit-code dist/

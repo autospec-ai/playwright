@@ -1,0 +1,38 @@
+import { ActionConfig } from '../src/types';
+
+export function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig {
+  return {
+    llm: { provider: 'openai', apiKey: 'test-key', model: '', baseUrl: undefined },
+    testDirectory: 'e2e/generated',
+    testPatterns: ['e2e/**/*.spec.ts'],
+    baseUrl: 'http://localhost:3000',
+    framework: 'react',
+    diffMode: 'auto',
+    includePaths: [],
+    excludePaths: [],
+    autoCommit: false,
+    autoPr: false,
+    maxTestFiles: 5,
+    dryRun: true,
+    overwriteExistingFiles: false,
+    customInstructions: '',
+    pomPatterns: ['__fixtures__/no-page-objects/**/*.ts'],
+    utilityPatterns: ['__fixtures__/no-utilities/**/*.ts'],
+    pomOutputDirectory: '',
+    projectContextBudget: 8000,
+    diffContextBudget: 24000,
+    traceOnFailure: false,
+    traceMode: 'retain-on-failure',
+    generateApiMocks: false,
+    mockErrorStates: false,
+    fixtureExtractionThreshold: 3,
+    visualRegression: false,
+    visualThreshold: 0.2,
+    visualMaxDiffRatio: 0.05,
+    visualFullPage: false,
+    accessibilityAssertions: false,
+    axeScan: false,
+    axeStandard: 'wcag2aa',
+    ...overrides,
+  };
+}

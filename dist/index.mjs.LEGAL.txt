@@ -1,0 +1,63 @@
+Bundled license information:
+
+undici/lib/web/fetch/body.js:
+  /*! formdata-polyfill. MIT License. Jimmy Wärting <https://jimmy.warting.se/opensource> */
+
+undici/lib/web/websocket/frame.js:
+  /*! ws. MIT License. Einar Otto Stangvik <einaros@gmail.com> */
+
+web-streams-polyfill/dist/ponyfill.mjs:
+  /**
+   * @license
+   * web-streams-polyfill v4.0.0-beta.3
+   * Copyright 2021 Mattias Buelens, Diwank Singh Tomer and other contributors.
+   * This code is released under the MIT license.
+   * SPDX-License-Identifier: MIT
+   */
+
+formdata-node/lib/esm/blobHelpers.js:
+formdata-node/lib/esm/Blob.js:
+  /*! Based on fetch-blob. MIT License. Jimmy Wärting <https://jimmy.warting.se/opensource> & David Frank */
+
+humanize-ms/index.js:
+  /*!
+   * humanize-ms - index.js
+   * Copyright(c) 2014 dead_horse <dead_horse@qq.com>
+   * MIT Licensed
+   */
+
+node-domexception/index.js:
+  /*! node-domexception. MIT License. Jimmy Wärting <https://jimmy.warting.se/opensource> */
+
+typescript/lib/typescript.js:
+  /*! *****************************************************************************
+  Copyright (c) Microsoft Corporation. All rights reserved.
+  Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+  this file except in compliance with the License. You may obtain a copy of the
+  License at http://www.apache.org/licenses/LICENSE-2.0
+  
+  THIS CODE IS PROVIDED ON AN *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
+  WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
+  MERCHANTABLITY OR NON-INFRINGEMENT.
+  
+  See the Apache Version 2.0 License for specific language governing permissions
+  and limitations under the License.
+  ***************************************************************************** */
+
+content-type/dist/index.js:
+  /*!
+   * content-type
+   * Copyright(c) 2015 Douglas Christopher Wilson
+   * MIT Licensed
+   */
+
+@octokit/request-error/dist-src/index.js:
+  /* v8 ignore else -- @preserve -- Bug with vitest coverage where it sees an else branch that doesn't exist */
+
+@octokit/request/dist-bundle/index.js:
+  /* v8 ignore next -- @preserve */
+  /* v8 ignore else -- @preserve */
+
+@octokit/graphql/dist-bundle/index.js:
+  /* v8 ignore if -- @preserve */

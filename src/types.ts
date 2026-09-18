@@ -123,6 +123,7 @@ export interface ProjectContext {
 // ─── Action Configuration ───
 
 export type TraceMode = 'on' | 'off' | 'retain-on-failure' | 'on-first-retry';
+export type AxeStandard = 'wcag2a' | 'wcag2aa' | 'wcag21a' | 'wcag21aa' | 'best-practice';
 
 export interface ActionConfig {
   llm: LLMConfig;
@@ -137,6 +138,7 @@ export interface ActionConfig {
   autoPr: boolean;
   maxTestFiles: number;
   dryRun: boolean;
+  overwriteExistingFiles: boolean;
   customInstructions: string;
 
   // Feature: Project Structure Discovery
@@ -144,6 +146,7 @@ export interface ActionConfig {
   utilityPatterns: string[];
   pomOutputDirectory: string;
   projectContextBudget: number;
+  diffContextBudget: number;
 
   // Feature: Trace Viewer Integration
   traceOnFailure: boolean;
@@ -163,13 +166,20 @@ export interface ActionConfig {
   // Feature: Accessibility / Aria Snapshot Assertions
   accessibilityAssertions: boolean;
   axeScan: boolean;
-  axeStandard: string;
+  axeStandard: AxeStandard;
+}
+
+export interface GeneratedPomFile {
+  filename: string;
+  filepath: string;
+  content: string;
 }
 
 export interface ActionResult {
   testsGenerated: number;
   testFiles: string[];
   fixtureFiles?: string[];
+  pomFiles?: string[];
   prNumber?: number;
   summary: string;
 }

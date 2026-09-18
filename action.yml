@@ -73,6 +73,10 @@ inputs:
     description: 'Preview generated tests without writing files'
     required: false
     default: 'false'
+  overwrite_existing_files:
+    description: 'Allow generated tests, fixtures, or page objects to overwrite existing files'
+    required: false
+    default: 'false'
   custom_instructions:
     description: 'Additional instructions for the LLM when generating tests'
     required: false
@@ -95,6 +99,10 @@ inputs:
     description: 'Approximate token budget for project context injected into LLM prompts'
     required: false
     default: '8000'
+  diff_context_budget:
+    description: 'Approximate token budget for changed-file diffs and source injected into planning prompts'
+    required: false
+    default: '24000'
 
   # --- Trace Viewer Integration ---
   trace_on_failure:
@@ -105,6 +113,10 @@ inputs:
     description: 'Playwright trace mode: on | off | retain-on-failure | on-first-retry'
     required: false
     default: 'retain-on-failure'
+  test_results_directory:
+    description: 'Directory scanned by the post-action for Playwright traces, screenshots, and video'
+    required: false
+    default: 'test-results'
 
   # --- API Mock Generation ---
   generate_api_mocks:
@@ -163,7 +175,11 @@ outputs:
     description: 'Human-readable summary of what was generated'
   fixture_files:
     description: 'JSON array of generated fixture file paths (when API mock generation is enabled)'
+  pom_files:
+    description: 'JSON array of generated page-object file paths'
 
 runs:
-  using: 'node20'
-  main: 'dist/index.js'
+  using: 'node24'
+  main: 'dist/index.mjs'
+  post: 'dist/post/index.mjs'
+  post-if: 'always()'

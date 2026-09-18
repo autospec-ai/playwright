@@ -3,6 +3,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { glob } from 'glob';
 
+export interface TraceUploadResult {
+  artifactName: string;
+  fileCount: number;
+}
+
 /**
  * Handles uploading Playwright traces as GitHub Actions artifacts
  * and building failure diagnostics from test results.
@@ -12,13 +17,15 @@ export class TraceUploader {
    * Upload trace/screenshot/video files from test-results as a GitHub Actions artifact.
    * Uses dynamic import of @actions/artifact for graceful degradation.
    */
-  static async uploadTraces(testResultsDir: string): Promise<void> {
-    try {
-      // Dynamic import — graceful degradation if package not available
-      // Use variable to prevent ncc from statically resolving the import
-      const artifactPkg = '@actions/artifact';
-      const { DefaultArtifactClient } = await import(/* webpackIgnore: true */ artifactPkg);
+  static async uploadTraces(testResultsDir: string): Promise<TraceUploadResult> {
+      const { DefaultArtifactClient } = await import('@actions/artifact');
       const artifactClient = new DefaultArtifactClient();
+      const artifactName = [
+        'playwright-traces',
+        process.env.GITHUB_RUN_ID || 'local',
+        process.env.GITHUB_JOB,
+        process.env.GITHUB_RUN_ATTEMPT,
+      ].filter(Boolean).join('-');
 
       const patterns = [
         path.join(testResultsDir, '**', 'trace.zip'),
@@ -34,23 +41,20 @@ export class TraceUploader {
 
       if (files.length === 0) {
         core.info('No trace files found to upload.');
-        return;
+        return { artifactName, fileCount: 0 };
       }
 
       core.info(`Uploading ${files.length} trace file(s) as artifact...`);
 
       await artifactClient.uploadArtifact(
-        'playwright-traces',
+        artifactName,
         files,
         testResultsDir,
         { retentionDays: 30 }
       );
 
-      core.info(`Uploaded ${files.length} trace file(s) as 'playwright-traces' artifact.`);
-    } catch (err) {
-      // Graceful degradation — don't fail the action if artifact upload fails
-      core.warning(`Trace upload failed (non-fatal): ${err}`);
-    }
+      core.info(`Uploaded ${files.length} trace file(s) as '${artifactName}' artifact.`);
+      return { artifactName, fileCount: files.length };
   }
 
   /**
@@ -83,7 +87,8 @@ export class TraceUploader {
 
       const testName = dir.name
         .replace(/-retry\d+$/, '')
-        .replace(/-/g, ' ');
+        .replace(/-/g, ' ')
+        .replace(/[|\r\n]/g, ' ');
 
       rows.push(
         `| ${testName} | ${hasTrace ? '✅' : '❌'} | ${hasScreenshot ? '✅' : '❌'} | ${hasVideo ? '✅' : '❌'} |`

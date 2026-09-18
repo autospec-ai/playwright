@@ -6,6 +6,16 @@ import { DiffMode, DiffResult, FileDiff, ActionConfig } from '../types';
 
 // [FIX #2] SHA validation pattern
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const ZERO_SHA = '0'.repeat(40);
+
+interface PullRequestFile {
+  filename: string;
+  status: string;
+  patch?: string;
+  additions: number;
+  deletions: number;
+  previous_filename?: string;
+}
 
 function validateSha(sha: string, label: string): void {
   if (!SHA_PATTERN.test(sha)) {
@@ -102,16 +112,15 @@ export class DiffAnalyzer {
       throw new Error('GITHUB_TOKEN is required for PR diff analysis');
     }
 
-    const { data: files } = await this.octokit.rest.pulls.listFiles({
+    const files = await this.octokit.paginate(this.octokit.rest.pulls.listFiles, {
       owner: context.repo.owner,
       repo: context.repo.repo,
       pull_number: pr.number,
-      per_page: 300,
-    });
+      per_page: 100,
+    }) as PullRequestFile[];
 
-    // [FIX #7] Warn when GitHub API may have truncated results
-    if (files.length === 300) {
-      core.warning('PR has 300+ changed files; results may be truncated by the GitHub API limit.');
+    if (files.length >= 3000) {
+      core.warning('PR has 3,000 or more changed files; GitHub may truncate the changed-file list.');
     }
 
     const diffs: FileDiff[] = files.map(f => ({
@@ -144,20 +153,30 @@ export class DiffAnalyzer {
     } else {
       // Fallback: diff against HEAD~1
       headSha = await this.execGit('rev-parse', 'HEAD');
-      baseSha = await this.execGit('rev-parse', 'HEAD~1');
+      try {
+        baseSha = await this.execGit('rev-parse', 'HEAD~1');
+      } catch {
+        baseSha = ZERO_SHA;
+      }
     }
 
     // [FIX #2] Validate SHA values before using them in git commands
     validateSha(baseSha, 'base');
     validateSha(headSha, 'head');
 
-    // [FIX #6] Use two-dot range for push diffs (direct A..B, not merge-base A...B)
-    const diffOutput = await this.execGit(
-      'diff',
-      '--name-status',
-      '--no-renames',
-      `${baseSha}..${headSha}`
-    );
+    if (headSha === ZERO_SHA) {
+      return {
+        files: [],
+        baseSha,
+        headSha,
+        summary: 'Push deleted a branch; no head revision remains to analyze.',
+      };
+    }
+
+    const isRootPush = baseSha === ZERO_SHA;
+    const diffOutput = isRootPush
+      ? await this.execGit('diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '--no-renames', headSha)
+      : await this.execGit('diff', '--name-status', '--no-renames', `${baseSha}..${headSha}`);
 
     const files: FileDiff[] = [];
 
@@ -169,7 +188,9 @@ export class DiffAnalyzer {
       // Get the patch for this specific file
       let patch = '';
       try {
-        patch = await this.execGit('diff', `${baseSha}..${headSha}`, '--', filename);
+        patch = isRootPush
+          ? await this.execGit('show', '--format=', '--no-ext-diff', headSha, '--', filename)
+          : await this.execGit('diff', `${baseSha}..${headSha}`, '--', filename);
       } catch {
         // File might be binary or deleted
       }

@@ -1,12 +1,14 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as ts from 'typescript';
 import { glob } from 'glob';
 import {
   ActionConfig,
   DiffResult,
   ExistingTest,
   ExtractedFixture,
+  GeneratedPomFile,
   GeneratedTest,
   LLMClient,
   TestPlan,
@@ -19,6 +21,7 @@ import { ProjectScanner } from '../discovery/project-scanner';
 // [FIX #3] Safe filename pattern: allow alphanumeric, hyphens, underscores, dots, forward slashes
 // but no '..' segments, no absolute paths, no backslashes
 const SAFE_FILENAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$/;
+const DISCOVERY_IGNORE = ['**/node_modules/**', '**/dist/**', '**/.git/**'];
 
 function validateTestFilename(filename: string): void {
   if (!SAFE_FILENAME_PATTERN.test(filename)) {
@@ -30,20 +33,123 @@ function validateTestFilename(filename: string): void {
   if (path.isAbsolute(filename)) {
     throw new Error(`Unsafe test filename rejected: "${filename}". Absolute paths are not allowed.`);
   }
-}
-
-function validateTestPath(filepath: string, testDirectory: string): void {
-  const resolvedDir = path.resolve(testDirectory);
-  const resolvedPath = path.resolve(filepath);
-  if (!resolvedPath.startsWith(resolvedDir + path.sep) && resolvedPath !== resolvedDir) {
-    throw new Error(`Test filepath "${filepath}" resolves outside the test directory "${testDirectory}".`);
+  if (!filename.endsWith('.spec.ts')) {
+    throw new Error(`Unsafe test filename rejected: "${filename}". Generated tests must use the .spec.ts extension.`);
   }
 }
 
-interface GeneratedPomFile {
-  filename: string;
-  filepath: string;
-  content: string;
+function validateGeneratedFilename(filename: string, kind: string, extensions: string[]): void {
+  if (!SAFE_FILENAME_PATTERN.test(filename) || filename.includes('..') || path.isAbsolute(filename)) {
+    throw new Error(`Unsafe ${kind} filename rejected: "${filename}".`);
+  }
+  if (!extensions.some(extension => filename.endsWith(extension))) {
+    throw new Error(`${kind} filename "${filename}" must end with ${extensions.join(' or ')}.`);
+  }
+}
+
+function validateContainedPath(filepath: string, directory: string, label: string): void {
+  const resolvedDir = path.resolve(directory);
+  const resolvedPath = path.resolve(filepath);
+  if (!resolvedPath.startsWith(resolvedDir + path.sep) && resolvedPath !== resolvedDir) {
+    throw new Error(`${label} filepath "${filepath}" resolves outside the configured directory "${directory}".`);
+  }
+}
+
+function validateTypeScript(code: string, filename: string): void {
+  const result = ts.transpileModule(code, {
+    fileName: filename,
+    reportDiagnostics: true,
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+    },
+  });
+  const errors = (result.diagnostics ?? []).filter(
+    diagnostic => diagnostic.category === ts.DiagnosticCategory.Error
+  );
+  if (errors.length > 0) {
+    const message = ts.flattenDiagnosticMessageText(errors[0].messageText, '\n');
+    throw new Error(`Generated TypeScript in "${filename}" is invalid: ${message}`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validateTestPlan(value: unknown, diff: DiffResult): TestPlan {
+  if (!isRecord(value) || typeof value.reasoning !== 'string' || !Array.isArray(value.tests)) {
+    throw new Error('Plan must contain a string reasoning field and a tests array.');
+  }
+  if (value.tests.length > 100) {
+    throw new Error('Plan contains more than 100 tests.');
+  }
+
+  const changedFiles = new Set(diff.files.map(file => file.filename));
+  const tests = value.tests.map((candidate, index) => {
+    if (!isRecord(candidate)) throw new Error(`Plan test ${index + 1} must be an object.`);
+    const requiredStrings = ['targetFile', 'testFilename', 'description'] as const;
+    for (const field of requiredStrings) {
+      if (typeof candidate[field] !== 'string' || candidate[field].trim() === '') {
+        throw new Error(`Plan test ${index + 1} has an invalid ${field}.`);
+      }
+    }
+    if (!changedFiles.has(candidate.targetFile as string)) {
+      throw new Error(`Plan test ${index + 1} targets a file that is not in the analyzed diff.`);
+    }
+    validateTestFilename(candidate.testFilename as string);
+    if (!Array.isArray(candidate.userFlows) || !candidate.userFlows.every(flow => typeof flow === 'string')) {
+      throw new Error(`Plan test ${index + 1} has invalid userFlows.`);
+    }
+    if (!['high', 'medium', 'low'].includes(candidate.priority as string)) {
+      throw new Error(`Plan test ${index + 1} has an invalid priority.`);
+    }
+    if (!['sev1', 'sev2', 'sev3', 'sev4'].includes(candidate.severity as string)) {
+      throw new Error(`Plan test ${index + 1} has an invalid severity.`);
+    }
+
+    let apiDependencies: TestPlan['tests'][number]['apiDependencies'];
+    if (candidate.apiDependencies !== undefined) {
+      if (!Array.isArray(candidate.apiDependencies)) {
+        throw new Error(`Plan test ${index + 1} has invalid apiDependencies.`);
+      }
+      apiDependencies = candidate.apiDependencies.map((dependency, dependencyIndex) => {
+        if (!isRecord(dependency)) {
+          throw new Error(`API dependency ${dependencyIndex + 1} in plan test ${index + 1} must be an object.`);
+        }
+        for (const field of ['url', 'method', 'description'] as const) {
+          if (typeof dependency[field] !== 'string') {
+            throw new Error(`API dependency ${dependencyIndex + 1} in plan test ${index + 1} has an invalid ${field}.`);
+          }
+        }
+        if (dependency.responseShape !== undefined && typeof dependency.responseShape !== 'string') {
+          throw new Error(`API dependency ${dependencyIndex + 1} has an invalid responseShape.`);
+        }
+        if (dependency.isWebSocket !== undefined && typeof dependency.isWebSocket !== 'boolean') {
+          throw new Error(`API dependency ${dependencyIndex + 1} has an invalid isWebSocket value.`);
+        }
+        return {
+          url: dependency.url as string,
+          method: dependency.method as string,
+          description: dependency.description as string,
+          responseShape: dependency.responseShape as string | undefined,
+          isWebSocket: dependency.isWebSocket as boolean | undefined,
+        };
+      });
+    }
+
+    return {
+      targetFile: candidate.targetFile as string,
+      testFilename: candidate.testFilename as string,
+      description: candidate.description as string,
+      userFlows: candidate.userFlows as string[],
+      priority: candidate.priority as 'high' | 'medium' | 'low',
+      severity: candidate.severity as 'sev1' | 'sev2' | 'sev3' | 'sev4',
+      apiDependencies,
+    };
+  });
+
+  return { reasoning: value.reasoning, tests };
 }
 
 export class TestGenerator {
@@ -66,7 +172,7 @@ export class TestGenerator {
     }
 
     // Step 1: Discover existing tests for style reference + dedup
-    const existingTests = await this.discoverExistingTests();
+    const existingTests = await this.discoverExistingTests(diff);
     core.info(`Found ${existingTests.length} existing test files for reference`);
 
     // Step 1b: Scan project structure for POM, utilities, and coverage
@@ -106,7 +212,7 @@ export class TestGenerator {
         const test = await this.generateTest(entry, diff, existingTests, styleRef);
 
         // [FIX #3] Validate the resolved path stays within testDirectory
-        validateTestPath(test.filepath, this.config.testDirectory);
+        validateContainedPath(test.filepath, this.config.testDirectory, 'Test');
 
         tests.push(test);
         core.info(`  ✓ Generated ${test.filepath} (${test.content.length} chars)`);
@@ -123,6 +229,8 @@ export class TestGenerator {
         this.config.testDirectory
       );
       if (this.extractedFixtures.length > 0) {
+        for (const test of tests) validateTypeScript(test.content, test.filename);
+        for (const fixture of this.extractedFixtures) validateTypeScript(fixture.content, fixture.filepath);
         core.info(`Extracted ${this.extractedFixtures.length} fixture file(s) from tests with heavy API mocking`);
       }
     }
@@ -194,16 +302,22 @@ export class TestGenerator {
     // parts[1] is the filename, parts[2] is the POM content, etc.
     const testCode = parts[0];
 
+    const extracted: GeneratedPomFile[] = [];
     for (let i = 1; i < parts.length; i += 2) {
       const filename = parts[i].trim();
       const pomContent = (parts[i + 1] || '').trim();
 
       if (filename && pomContent) {
+        validateGeneratedFilename(filename, 'POM', ['.ts', '.tsx']);
         const filepath = path.join(pomDir, filename);
-        this.generatedPomFiles.push({ filename, filepath, content: pomContent });
+        validateContainedPath(filepath, pomDir, 'POM');
+        validateTypeScript(pomContent, filepath);
+        extracted.push({ filename, filepath, content: pomContent });
         core.info(`Extracted POM file: ${filepath}`);
       }
     }
+
+    this.generatedPomFiles.push(...extracted);
 
     return testCode.trim();
   }
@@ -235,12 +349,13 @@ export class TestGenerator {
       .trim();
 
     try {
-      const plan = JSON.parse(cleaned) as TestPlan;
+      const plan = validateTestPlan(JSON.parse(cleaned) as unknown, diff);
       core.info(`Plan reasoning: ${plan.reasoning}`);
       return plan;
     } catch (err) {
-      core.warning(`Failed to parse test plan JSON: ${err}\nRaw response:\n${response.content}`);
-      return { reasoning: 'Failed to parse LLM response', tests: [] };
+      const detail = err instanceof Error ? err.message : String(err);
+      core.debug(`Invalid plan response preview: ${response.content.slice(0, 500)}`);
+      throw new Error(`LLM returned an invalid test plan: ${detail}`);
     }
   }
 
@@ -307,6 +422,11 @@ export class TestGenerator {
       );
     }
 
+    if (!/from\s+['"]@playwright\/test['"]/.test(code) || !/\btest(?:\.describe)?\s*\(/.test(code)) {
+      throw new Error(`Generated test "${planEntry.testFilename}" is missing a Playwright import or test declaration.`);
+    }
+    validateTypeScript(code, planEntry.testFilename);
+
     const filepath = path.join(this.config.testDirectory, planEntry.testFilename);
 
     return {
@@ -321,12 +441,26 @@ export class TestGenerator {
 
   // ─── Existing Test Discovery ───
 
-  private async discoverExistingTests(): Promise<ExistingTest[]> {
+  private async discoverExistingTests(diff: DiffResult): Promise<ExistingTest[]> {
     const seen = new Set<string>();
     const tests: ExistingTest[] = [];
     for (const pattern of this.config.testPatterns) {
-      const matches = await glob(pattern, { absolute: true });
-      for (const filepath of matches) {
+      const matches = await glob(pattern, { absolute: true, ignore: DISCOVERY_IGNORE });
+      const rankedMatches = matches.sort((a, b) => {
+        const relativeA = path.relative(process.cwd(), a);
+        const relativeB = path.relative(process.cwd(), b);
+        const score = (candidate: string): number => diff.files.reduce((total, changed) => {
+          const candidateParts = candidate.split(path.sep);
+          const changedParts = changed.filename.split('/');
+          let shared = 0;
+          while (shared < candidateParts.length && shared < changedParts.length && candidateParts[shared] === changedParts[shared]) {
+            shared++;
+          }
+          return Math.max(total, shared);
+        }, 0);
+        return score(relativeB) - score(relativeA) || relativeA.localeCompare(relativeB);
+      });
+      for (const filepath of rankedMatches) {
         if (tests.length >= 10) break;
         const rel = path.relative(process.cwd(), filepath);
         if (seen.has(rel)) continue;
@@ -357,7 +491,7 @@ export class TestGenerator {
 
     for (const test of tests) {
       // [FIX #3] Re-validate before writing to disk
-      validateTestPath(test.filepath, this.config.testDirectory);
+      validateContainedPath(test.filepath, this.config.testDirectory, 'Test');
 
       const fullPath = path.resolve(test.filepath);
       const dir = path.dirname(fullPath);
@@ -372,5 +506,28 @@ export class TestGenerator {
     }
 
     return written;
+  }
+
+  preflightWrites(tests: GeneratedTest[]): void {
+    const targets = [
+      ...tests.map(test => ({ filepath: test.filepath, directory: this.config.testDirectory, label: 'Test' })),
+      ...this.extractedFixtures.map(fixture => ({ filepath: fixture.filepath, directory: this.config.testDirectory, label: 'Fixture' })),
+      ...this.generatedPomFiles.map(pom => ({ filepath: pom.filepath, directory: this.config.pomOutputDirectory, label: 'POM' })),
+    ];
+    const seen = new Set<string>();
+    for (const target of targets) {
+      validateContainedPath(target.filepath, target.directory, target.label);
+      const resolved = path.resolve(target.filepath);
+      if (seen.has(resolved)) {
+        throw new Error(`Multiple generated artifacts target the same path: "${target.filepath}".`);
+      }
+      seen.add(resolved);
+      if (!this.config.overwriteExistingFiles && fs.existsSync(resolved)) {
+        throw new Error(
+          `Refusing to overwrite existing ${target.label.toLowerCase()} file "${target.filepath}". ` +
+          'Set overwrite_existing_files to true to allow this.'
+        );
+      }
+    }
   }
 }
