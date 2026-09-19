@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const banner = [
@@ -44,9 +44,11 @@ for (const [packagePath, metadata] of Object.entries(lockfile.packages ?? {})) {
   const packageJsonPath = join(packagePath, 'package.json');
   if (!existsSync(packageJsonPath)) continue;
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-  const licenseFile = ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENCE']
-    .map(filename => join(packagePath, filename))
-    .find(existsSync);
+  const packageFiles = readdirSync(packagePath);
+  const licenseFilename = ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENCE']
+    .map(preferred => packageFiles.find(filename => filename.toLowerCase() === preferred.toLowerCase()))
+    .find(Boolean);
+  const licenseFile = licenseFilename ? join(packagePath, licenseFilename) : undefined;
   const licenseText = licenseFile
     ? readFileSync(licenseFile, 'utf8').trim()
     : `License identifier: ${packageJson.license || metadata.license || 'UNKNOWN'}`;
