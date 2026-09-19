@@ -144,8 +144,8 @@ export class DiffAnalyzer {
 
   private async analyzePush(): Promise<DiffResult> {
     const context = github.context;
-    let baseSha = '';
-    let headSha = '';
+    let baseSha: string;
+    let headSha: string;
 
     if (context.payload.before && context.payload.after) {
       baseSha = context.payload.before;

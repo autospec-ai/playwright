@@ -355,7 +355,7 @@ export class TestGenerator {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       core.debug(`Invalid plan response preview: ${response.content.slice(0, 500)}`);
-      throw new Error(`LLM returned an invalid test plan: ${detail}`);
+      throw new Error(`LLM returned an invalid test plan: ${detail}`, { cause: err });
     }
   }
 

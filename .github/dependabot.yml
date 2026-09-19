@@ -4,6 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # TypeScript 6+ is outside the supported peer ranges of the current
+      # TypeScript ESLint parser and ts-jest release lines.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
     groups:
       production-dependencies:
         dependency-type: production
