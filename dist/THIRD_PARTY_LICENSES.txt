@@ -124,7 +124,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ================================================================================
 
-@anthropic-ai/sdk@0.125.0
+@anthropic-ai/sdk@0.126.0
 
 Copyright 2023 Anthropic, PBC.
 
