@@ -1,9 +1,34 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import process from 'node:process';
 
+const repositoryRoot = process.cwd();
+const smokeWorkspace = mkdtempSync(join(tmpdir(), 'autospec-dist-smoke-'));
+
+function git(...args) {
+  execFileSync('git', args, { cwd: smokeWorkspace, stdio: 'pipe' });
+}
+
+function createSmokeRepository() {
+  git('init');
+  git('config', 'user.name', 'AutoSpec Dist Smoke');
+  git('config', 'user.email', 'dist-smoke@autospec.ai');
+
+  const sourceFile = join(smokeWorkspace, 'smoke-source.ts');
+  writeFileSync(sourceFile, 'export const smokeVersion = 1;\n');
+  git('add', 'smoke-source.ts');
+  git('commit', '-m', 'initial smoke fixture');
+
+  writeFileSync(sourceFile, 'export const smokeVersion = 2;\n');
+  git('add', 'smoke-source.ts');
+  git('commit', '-m', 'update smoke fixture');
+}
+
 function run(entrypoint, extraEnv) {
-  const result = spawnSync(process.execPath, [entrypoint], {
-    cwd: process.cwd(),
+  const result = spawnSync(process.execPath, [resolve(repositoryRoot, entrypoint)], {
+    cwd: smokeWorkspace,
     env: {
       ...process.env,
       INPUT_LLM_API_KEY: 'dist-smoke-test',
@@ -31,8 +56,13 @@ function run(entrypoint, extraEnv) {
   }
 }
 
-run('dist/index.mjs', {});
-run('dist/post/index.mjs', {
-  INPUT_TRACE_ON_FAILURE: 'true',
-  INPUT_TEST_RESULTS_DIRECTORY: '__autospec_dist_smoke_no_results__',
-});
+try {
+  createSmokeRepository();
+  run('dist/index.mjs', {});
+  run('dist/post/index.mjs', {
+    INPUT_TRACE_ON_FAILURE: 'true',
+    INPUT_TEST_RESULTS_DIRECTORY: '__autospec_dist_smoke_no_results__',
+  });
+} finally {
+  rmSync(smokeWorkspace, { recursive: true, force: true });
+}

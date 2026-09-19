@@ -1,6 +1,6 @@
 {
   "name": "@autospec-ai/action",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "AI-powered Playwright E2E test generation from commit diffs",
   "repository": {
     "type": "git",
