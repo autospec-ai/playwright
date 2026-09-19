@@ -8,7 +8,11 @@ const repositoryRoot = process.cwd();
 const smokeWorkspace = mkdtempSync(join(tmpdir(), 'autospec-dist-smoke-'));
 
 function git(...args) {
-  execFileSync('git', args, { cwd: smokeWorkspace, stdio: 'pipe' });
+  return execFileSync('git', args, {
+    cwd: smokeWorkspace,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
 
 function createSmokeRepository() {
@@ -20,17 +24,28 @@ function createSmokeRepository() {
   writeFileSync(sourceFile, 'export const smokeVersion = 1;\n');
   git('add', 'smoke-source.ts');
   git('commit', '-m', 'initial smoke fixture');
+  const before = git('rev-parse', 'HEAD');
 
   writeFileSync(sourceFile, 'export const smokeVersion = 2;\n');
   git('add', 'smoke-source.ts');
   git('commit', '-m', 'update smoke fixture');
+  const after = git('rev-parse', 'HEAD');
+
+  const eventPath = join(smokeWorkspace, 'push-event.json');
+  writeFileSync(eventPath, JSON.stringify({ before, after }));
+  return { after, eventPath };
 }
 
-function run(entrypoint, extraEnv) {
+function run(entrypoint, smokeContext, extraEnv) {
   const result = spawnSync(process.execPath, [resolve(repositoryRoot, entrypoint)], {
     cwd: smokeWorkspace,
     env: {
       ...process.env,
+      GITHUB_EVENT_NAME: 'push',
+      GITHUB_EVENT_PATH: smokeContext.eventPath,
+      GITHUB_REPOSITORY: 'autospec-ai/dist-smoke',
+      GITHUB_SHA: smokeContext.after,
+      GITHUB_WORKSPACE: smokeWorkspace,
       INPUT_LLM_API_KEY: 'dist-smoke-test',
       INPUT_INCLUDE_PATHS: '__autospec_dist_smoke_no_matches__/',
       INPUT_AUTO_COMMIT: 'false',
@@ -57,9 +72,9 @@ function run(entrypoint, extraEnv) {
 }
 
 try {
-  createSmokeRepository();
-  run('dist/index.mjs', {});
-  run('dist/post/index.mjs', {
+  const smokeContext = createSmokeRepository();
+  run('dist/index.mjs', smokeContext, {});
+  run('dist/post/index.mjs', smokeContext, {
     INPUT_TRACE_ON_FAILURE: 'true',
     INPUT_TEST_RESULTS_DIRECTORY: '__autospec_dist_smoke_no_results__',
   });
