@@ -31,10 +31,10 @@
     "@actions/core": "^3.0.0",
     "@actions/exec": "^3.0.0",
     "@actions/github": "^9.0.0",
-    "@anthropic-ai/sdk": "^0.126.0",
+    "@anthropic-ai/sdk": "^0.128.0",
     "glob": "^13.0.6",
     "minimatch": "^10.2.6",
-    "openai": "^7.19.0",
+    "openai": "^7.22.0",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
